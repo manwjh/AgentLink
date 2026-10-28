@@ -9,7 +9,7 @@ import { readImageMedia, readMedia } from "../links.js";
 import { FRIEND_COLUMNS, listFriends, removeFriend, setCardFriend } from "../friends.js";
 import { loadDiscoverSelf, emptyDiscoverSelf, listActivePeople } from "../discoverBoard.js";
 import { listFacets } from "../facets.js";
-import { createIntel, downloadPacket, listPublicIntel, presentIntel, publicAuthor, searchPublicIntel, setIntelLike, setIntelStar } from "../intel.js";
+import { createIntel, countTodayIntel, downloadPacket, listPublicIntel, presentIntel, publicAuthor, searchPublicIntel, setIntelLike, setIntelStar } from "../intel.js";
 import { listNotifications, markNotificationsRead, unreadCount } from "../notifications.js";
 import { allow, retryAfterSeconds } from "../rateLimit.js";
 import { searchConfig } from "../searchConfig.js";
@@ -34,7 +34,7 @@ import { acceptAvatar, ensureCardImage, ensureUploadDir, newStorageName } from "
 import { readableBlobPath, tmpDir } from "../storage.js";
 import { isInlineRenderableMime, storeUploadedFile } from "../uploadStore.js";
 import { sendUploadError } from "./uploadError.js";
-import { brandView } from "../profile.js";
+import { brandView, siteTimeZone } from "../profile.js";
 
 const MiB = 1024 * 1024;
 
@@ -302,6 +302,17 @@ export function webRouter({
       .filter(Boolean);
     if (offered.some((tag) => tag === etag || tag === `W/${etag}`)) return res.status(304).end();
     res.json(snapshot);
+  });
+
+  // 顶栏那一行「今日」：一条小 JSON，只有条数、最后一条的时间与日界。
+  // 首帧通常已经由入口磁盘上的快照给出，这一条只负责让数字在页面停留时继续走：
+  // 为了一个数字每分钟拖一整份信息流过来不值得，所以它有独立的地址。
+  router.get("/today", contentGate, async (req, res) => {
+    // 这个数与具体是谁无关：访客与登录的人看到同一个，入口可以短缓存。
+    res.set("Cache-Control", req.account ? "private, no-store" : ANON_CACHE);
+    // 公开快照关着时没有「今日」可言，回 null 而不是 0：界面据此显示「—」。
+    const counts = publicBoardEnabled() ? await countTodayIntel(pool, siteTimeZone(profile?.view?.().site)) : null;
+    res.json({ counts });
   });
 
   // 管理后台的一次性入口。登录在站点域名上，/admin 在实例的内网地址上，

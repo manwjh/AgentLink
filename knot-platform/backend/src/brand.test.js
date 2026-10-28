@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
-import { brandView, cleanSite, createProfileStore, profileFilePath } from "./profile.js";
+import { DEFAULT_SITE_TIME_ZONE, brandView, cleanSite, createProfileStore, profileFilePath, siteTimeZone } from "./profile.js";
 import { webRouter } from "./routes/web.js";
 
 function listen(app) {
@@ -204,4 +204,17 @@ test("the session payload carries the site identity for the header", async () =>
     rmSync(uploadDir, { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// 「今天」按站点自己的钟算：档案写了 timezone 就用它；没写时不能退到 UTC，
+// 否则东八区的站在每天早上 8 点整换日，顶栏数字会在上午莫名其妙地清零。
+test("the site's day follows its own time zone, not UTC and not the reader's", () => {
+  assert.equal(siteTimeZone({ timezone: "Europe/Oslo" }), "Europe/Oslo");
+  assert.equal(siteTimeZone({ timezone: "Asia/Shanghai" }), "Asia/Shanghai");
+  // 写坏的值不能拿来切日子，退回实例所在时区。
+  const fallback = siteTimeZone({ timezone: "Mars/Base" });
+  assert.notEqual(fallback, "Mars/Base");
+  const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  assert.equal(fallback, local || DEFAULT_SITE_TIME_ZONE);
+  assert.equal(siteTimeZone(null), local || DEFAULT_SITE_TIME_ZONE);
 });

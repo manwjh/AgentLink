@@ -112,28 +112,85 @@ a:hover {
   margin-left: auto;
 }
 
-/* 站点名固定在顶栏正中。两侧各留三个图标的位置，名字长了省略，
-   不会压到按键；搜索展开时整条顶栏让给输入框。 */
+/* 站点名固定在顶栏正中。上面是名字，下面一行是这个站的今日脉搏：
+   今日新帖的条数。整块仍是一枚按钮（打开主理人弹窗），
+   两侧各留三个图标的位置，名字长了省略，不会压到按键；搜索展开时整条顶栏让给输入框。 */
 .site-title {
   justify-self: center;
   min-width: 0;
   max-width: 100%;
   /* 44px 是触控下限：它同时是主理人弹窗的唯一入口。 */
   min-height: 44px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0 0.25rem;
   border: 0;
   appearance: none;
   background: none;
   color: var(--color-text);
   font-family: inherit;
-  font-size: 1.05rem;
-  font-weight: 700;
-  line-height: 1.2;
+  line-height: 1.15;
   text-decoration: none;
   cursor: pointer;
+}
+
+.site-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+/* 数字是主信息，标签是副信息：不加胶囊、不加底色，靠字阶分开。
+   min-width 让 99 → 100 这一步不把整块推向一侧（名字也跟着不跳）；
+   六 em 是「今日 999 条」的宽度，四位数起转紧凑写法，不会再撑宽。 */
+.site-today {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  min-width: 6em;
+  color: var(--color-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.site-today b {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.site-today-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+/* 十五分钟内有新帖才亮，并且一直呼吸：数字在动，说明这个站还在被人用。 */
+.site-today.is-live .site-today-dot {
+  background: var(--color-accent);
+  animation: site-today-pulse 2s ease-out infinite;
+}
+
+@keyframes site-today-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(8, 102, 255, 0.35); }
+  70% { box-shadow: 0 0 0 6px rgba(8, 102, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(8, 102, 255, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-today.is-live .site-today-dot {
+    animation: none;
+  }
 }
 
 .site-title:hover {
@@ -160,7 +217,7 @@ a:hover {
     gap: 0.375rem;
   }
 
-  .site-title {
+  .site-name {
     font-size: 1rem;
   }
 }

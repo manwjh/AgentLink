@@ -6,9 +6,9 @@ import { DEFAULT_SITE_LOCALE, parseLocale } from "@knot/locale";
 import { setDiscoverPublisher } from "./discoverPublish.js";
 import { filesByIntel, visibleVerdict } from "./information.js";
 import { listFacets } from "./facets.js";
-import { listPublicIntel, presentIntel } from "./intel.js";
+import { countTodayIntel, listPublicIntel, presentIntel } from "./intel.js";
 import { avatarUrlFor } from "./avatars.js";
-import { brandView } from "./profile.js";
+import { brandView, siteTimeZone } from "./profile.js";
 import { publicBoardEnabled, siteConfig } from "./system.js";
 
 // 最近发过公开信息的人。Internal Personal Agent 也算；平台自己的系统账号不算。
@@ -108,15 +108,23 @@ export async function listActivePeople(pool, limit = 20) {
   return rows.map(publicPerson);
 }
 
-export async function assembleDiscoverBoard(pool, meta = {}) {
+export async function assembleDiscoverBoard(pool, meta = {}, { timeZone } = {}) {
   // 公开快照关掉时写一份空板，入口主机下一次推送就会把旧内容清掉。
   if (!publicBoardEnabled()) {
-    return { ...meta, information: [], requests: [], people: [], facets: { categories: [], topics: [] } };
+    return { ...meta, information: [], requests: [], people: [], facets: { categories: [], topics: [] }, counts: null };
   }
   const posts = await listPublicIntel(pool, INTEL_SNAPSHOT_LIMIT, null);
-  const people = await listActivePeople(pool);
-  const facets = await listFacets(pool);
-  const files = await filesByIntel(pool, posts.map((row) => row.id));
+  // 今日计数取不到时只让顶栏少一行数字，不能让整份快照跟着写不出来：
+  // 首屏是读的人最先看到的东西，为了一行统计把它拖没不值得。
+  const [people, facets, counts, files] = await Promise.all([
+    listActivePeople(pool),
+    listFacets(pool),
+    countTodayIntel(pool, timeZone || siteTimeZone(null)).catch((error) => {
+      console.error("today count failed:", error.message);
+      return null;
+    }),
+    filesByIntel(pool, posts.map((row) => row.id)),
+  ]);
   return {
     ...meta,
     information: posts.map((row) => publicPost(row, files.get(row.id) || [])),
@@ -125,6 +133,8 @@ export async function assembleDiscoverBoard(pool, meta = {}) {
     requests: [],
     people,
     facets,
+    // 顶栏那一行「今日」：站点本地日的条数与日界。当天之内不必回源就知道该不该归零。
+    counts,
   };
 }
 
@@ -173,7 +183,9 @@ function jsonPath(boardDir) {
 }
 
 export async function writeDiscoverBoard(env, deps = {}) {
-  const board = await assembleDiscoverBoard(env.pool, env.meta ? env.meta() : {});
+  // 时区由绑定方给（它手上有站点档案）；单独调用的地方没有档案，就按实例所在时区算。
+  const timeZone = env.timeZone ? env.timeZone() : undefined;
+  const board = await assembleDiscoverBoard(env.pool, env.meta ? env.meta() : {}, { timeZone });
   const dest = jsonPath(env.boardDir);
   const tmp = `${dest}.${randomUUID()}.tmp`;
   await mkdir(env.boardDir, { recursive: true });
@@ -232,6 +244,7 @@ export function bindDiscoverBoard({ pool, uploadDir, boardDir, profile }) {
     uploadDir,
     boardDir: path.resolve(boardDir || process.env.DISCOVER_BOARD_DIR || path.join(uploadDir, "board")),
     meta: () => discoverBoardMeta({ profile }),
+    timeZone: () => siteTimeZone(profile?.view?.().site),
   };
   setDiscoverPublisher(() => scheduleDiscoverWrite(env, pushDiscoverBoard));
   scheduleDiscoverWrite(env, pushDiscoverBoard);

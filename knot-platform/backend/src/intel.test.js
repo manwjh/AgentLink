@@ -6,7 +6,7 @@ import test from "node:test";
 import { keyEntry } from "@knot/config";
 import { FAILURE_CODES } from "./agents/openclaw.js";
 import { saveReviewExtract } from "./extracts.js";
-import { compareByWeight, createIntel, deleteOwnPost, judgeIntel, listPublicIntel, loadPublicIntel, noteReviewFailure, notifyOwnerReviewStalled, presentIntel, publicAuthor, reviewAttemptOf, reviewFailureText, reviewMetaOf, searchPublicIntel } from "./intel.js";
+import { compareByWeight, countTodayIntel, createIntel, deleteOwnPost, judgeIntel, listPublicIntel, loadPublicIntel, noteReviewFailure, notifyOwnerReviewStalled, presentIntel, publicAuthor, reviewAttemptOf, reviewFailureText, reviewMetaOf, searchPublicIntel } from "./intel.js";
 import { clearSearchCache } from "./searchCache.js";
 import { imageUploadLimit, itemPrice, serviceFee, policyConfig } from "./points.js";
 
@@ -485,8 +485,7 @@ test("service fee rounds attachment bytes up per MB and caps", () => {
   assert.equal(serviceFee(1024 * 1024 * 5, 2, 10), 10); // 5MB×2=10 正好
 });
 
-test("a deep link finds the post through its revision chain, not by exact id", async () => {
-  const calls = [];
+test("a deep link finds the post through its revision chain, not by exact id", async () => {  const calls = [];
   const pool = {
     async query(sql, params) {
       calls.push({ sql, params });
@@ -944,4 +943,68 @@ test("every failure code has its own sentence, not the generic one", () => {
     assert.doesNotMatch(text, /^审核没有完成/, `${code} 不应该退到兜底文案`);
   }
   assert.match(reviewFailureText(new Error("没见过的码")), /^审核没有完成/);
+});
+
+// 「今日」是顶栏上那一行数字的全部来源：条数、最后一条的时间、日界。
+// 口径必须和信息流一致，否则会出现「说 12 条，翻到下面只数得出 9 条」。
+test("the today count is the feed's own filter, bounded to the site's local day", async () => {
+  const calls = [];
+  const pool = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return {
+        rows: [
+          {
+            start_at: new Date("2026-10-14T16:00:00.000Z"),
+            end_at: new Date("2026-10-15T16:00:00.000Z"),
+            posts: 12,
+            last_at: new Date("2026-10-15T09:20:00.000Z"),
+          },
+        ],
+      };
+    },
+  };
+  assert.deepEqual(await countTodayIntel(pool, "Asia/Shanghai"), {
+    posts: 12,
+    lastPostAt: "2026-10-15T09:20:00.000Z",
+    dayEndsAt: "2026-10-15T16:00:00.000Z",
+  });
+  assert.deepEqual(calls[0].params, ["Asia/Shanghai"]);
+  const sql = calls[0].sql;
+  // 日界按站点时区切，不是按 UTC 切。
+  assert.match(sql, /date_trunc\('day', now\(\) AT TIME ZONE \$1\)/);
+  assert.match(sql, /AT TIME ZONE \$1/);
+  // 与信息流同一套可见口径：可见结论、公开、post/fastpost、修订链只算最新一版。
+  assert.match(sql, /verdict IN \('pending', 'passed'\)/);
+  assert.match(sql, /i\.kind IN \('post', 'fastpost'\)/);
+  assert.match(sql, /newer\.version > i\.version/);
+  // 个人关掉的卡不影响这个数：它是全站的量，不是「给我看的有多少」。
+  assert.doesNotMatch(sql, /intel_dismissals/);
+  // 一行只讲一件事：不再顺手数作者数（顶栏不显示它，多算一次就是白花一次索引）。
+  assert.doesNotMatch(sql, /DISTINCT account_id/);
+});
+
+test("a today count without a day boundary is unknown, not zero", async () => {
+  // 没有日界就没有「今天」。写 0 会被读成「这个站今天一条都没发」。
+  const empty = { async query() { return { rows: [] }; } };
+  assert.equal(await countTodayIntel(empty, "Asia/Shanghai"), null);
+  const broken = { async query() { return { rows: [{ posts: 5, end_at: null }] }; } };
+  assert.equal(await countTodayIntel(broken, "Asia/Shanghai"), null);
+});
+
+test("a count that comes back as text or negative still reads as a whole number", async () => {
+  // pg 对 bigint 回文本，聚合被换成 bigint 时这里就是 "12"。界面要画的是数字，
+  // 不能把字符串直接塞进模板，也不能让负数穿到「今日 -1 条」。
+  const pool = {
+    async query() {
+      return { rows: [{ end_at: "2026-10-15T16:00:00.000Z", posts: "12", last_at: null }] };
+    },
+  };
+  assert.deepEqual(await countTodayIntel(pool, "Europe/Oslo"), {
+    posts: 12,
+    lastPostAt: null,
+    dayEndsAt: "2026-10-15T16:00:00.000Z",
+  });
+  const negative = { async query() { return { rows: [{ end_at: "2026-10-15T16:00:00.000Z", posts: -3 }] }; } };
+  assert.equal((await countTodayIntel(negative, "Europe/Oslo")).posts, 0);
 });

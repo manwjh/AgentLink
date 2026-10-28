@@ -44,6 +44,20 @@ function pool() {
     queries: [],
     async query(sql, params) {
       this.queries.push({ sql, params });
+      // 「今日」计数：一句话聚合出条数、最后一条和日界。
+      if (sql.includes("AS start_at")) {
+        if (this.countFails) throw new Error("count unavailable");
+        return {
+          rows: [
+            {
+              start_at: new Date("2026-10-14T16:00:00.000Z"),
+              end_at: new Date("2026-10-15T16:00:00.000Z"),
+              posts: 12,
+              last_at: new Date("2026-10-15T09:20:00.000Z"),
+            },
+          ],
+        };
+      }
       if (sql.includes("SELECT f.intel_id")) {
         return { rows: [{ intel_id: POST, id: FILE, mime: "image/jpeg", original_name: "a.jpg" }, { intel_id: POST, id: "sound", mime: "audio/mpeg", original_name: "a.mp3" }] };
       }
@@ -61,8 +75,7 @@ function pool() {
   };
 }
 
-test("the public board drops personal fields and keeps the author", async () => {
-  const board = await assembleDiscoverBoard(pool());
+test("the public board drops personal fields and keeps the author", async () => {  const board = await assembleDiscoverBoard(pool());
   const card = board.information[0];
   assert.equal(card.personal, false);
   assert.equal(card.starred, false);
@@ -191,4 +204,37 @@ test("the snapshot keeps enough posts to fill a low-frequency site's first scree
   const intel = fake.queries.find((query) => query.sql.includes("LIMIT $2"));
   assert.ok(intel, "the public intel query should be bounded");
   assert.equal(intel.params[1], 60);
+});
+
+test("快照带上今日计数，时区按站点自己的钟", async () => {
+  const fake = pool();
+  const board = await assembleDiscoverBoard(fake, {}, { timeZone: "Asia/Shanghai" });
+  // 顶栏那一行读的就是这三项：今天发了多少条、最后一条的时间、日界。
+  assert.deepEqual(board.counts, {
+    posts: 12,
+    lastPostAt: "2026-10-15T09:20:00.000Z",
+    dayEndsAt: "2026-10-15T16:00:00.000Z",
+  });
+  const query = fake.queries.find((item) => item.sql.includes("AS start_at"));
+  assert.ok(query, "今日计数应该发一次聚合查询");
+  assert.deepEqual(query.params, ["Asia/Shanghai"]);
+});
+
+test("计数取不到时只少一行数字，信息流照旧写下来", async () => {
+  // 首屏是读的人最先看到的东西，不能为了一行统计把整份快照拖没。
+  const fake = pool();
+  fake.countFails = true;
+  const board = await assembleDiscoverBoard(fake);
+  assert.equal(board.counts, null);
+  assert.equal(board.information.length, 1);
+});
+
+test("公开快照关着时没有今日计数", async () => {
+  installSystemPolicy({ guestBrowsing: false, registrationMode: "open", publicBoard: false });
+  try {
+    const board = await assembleDiscoverBoard(pool());
+    assert.equal(board.counts, null);
+  } finally {
+    installSystemPolicy({ guestBrowsing: true, registrationMode: "open", publicBoard: true });
+  }
 });

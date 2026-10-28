@@ -55,6 +55,18 @@ function validTimeZone(value) {
   }
 }
 
+// 站点自己的钟：档案写了 timezone 就用它；没写就用实例所在时区——「这个站的今天」
+// 取决于这个站，不是取决于读的人在哪。两处都拿不到才退到占位值。
+// 时间口径只在这一处定：快照里的今日计数与 /api/web/today 都从这里取。
+export const DEFAULT_SITE_TIME_ZONE = "Asia/Shanghai";
+
+export function siteTimeZone(site) {
+  const zone = String(site?.timezone || "").trim();
+  if (zone && validTimeZone(zone)) return zone;
+  const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return local && validTimeZone(local) ? local : DEFAULT_SITE_TIME_ZONE;
+}
+
 function lengthOf(text) {
   return [...text].length;
 }

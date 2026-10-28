@@ -757,6 +757,19 @@ ${FRIEND_COLUMNS},
     ${TIP_TOTAL_SQL}
 `;
 
+// 一条记录如果后面还有更新的可见版本，它自己就不算数：修订链只呈现最新一版。
+// 信息流与「今日」计数共用这一段：两处各写一份，将来改口径就会只有一边跟着改。
+const LATEST_REVISION_SQL = `
+    AND NOT EXISTS (
+      SELECT 1 FROM intel newer
+      WHERE COALESCE(newer.origin_id, newer.id) = COALESCE(i.origin_id, i.id)
+        AND newer.version > i.version
+        AND newer.is_public
+        AND newer.kind IN ('post', 'fastpost')
+        AND ${visibleVerdict("newer.verdict")}
+    )
+`;
+
 const PUBLIC_INTEL_FROM = `
   FROM intel i
   JOIN accounts u ON u.id = i.account_id
@@ -767,15 +780,7 @@ const PUBLIC_INTEL_FROM = `
       SELECT 1 FROM intel_dismissals d
       WHERE d.intel_id = i.id AND d.account_id = $1
     ))
-    AND NOT EXISTS (
-      SELECT 1 FROM intel newer
-      WHERE COALESCE(newer.origin_id, newer.id) = COALESCE(i.origin_id, i.id)
-        AND newer.version > i.version
-        AND newer.is_public
-        AND newer.kind IN ('post', 'fastpost')
-        AND ${visibleVerdict("newer.verdict")}
-    )
-`;
+${LATEST_REVISION_SQL}`;
 
 const PUBLIC_INTEL_SQL = `SELECT ${PUBLIC_INTEL_COLUMNS}${PUBLIC_INTEL_FROM}`;
 
@@ -888,6 +893,65 @@ export async function listPublicIntel(pool, limit = 30, userId = null, authorId 
   sql += ` ORDER BY i.created_at DESC, i.weight DESC, i.id DESC LIMIT $${params.length}`;
   const { rows } = await pool.query(sql, params);
   return rows;
+}
+
+// 「今天」是站点的今天：先按站点时区取本地零点，再用它切时间戳。
+// date_trunc 拿到的零点不带时区，末尾的 AT TIME ZONE 把它换回时间点；
+// 两处都不能省，少一处就按 UTC 或服务器时区算，跨时差会算错一整段日子。
+const TODAY_COUNT_SQL = `
+  WITH d AS (
+    SELECT (date_trunc('day', now() AT TIME ZONE $1)) AT TIME ZONE $1 AS start_at,
+           (date_trunc('day', now() AT TIME ZONE $1) + interval '1 day') AT TIME ZONE $1 AS end_at
+  ),
+  today AS (
+    SELECT i.created_at
+    FROM intel i, d
+    WHERE ${visibleVerdict("i.verdict")}
+      AND i.is_public
+      AND i.kind IN ('post', 'fastpost')
+      AND i.created_at >= d.start_at
+      AND i.created_at < d.end_at
+${LATEST_REVISION_SQL}
+  )
+  SELECT d.start_at, d.end_at,
+         (SELECT count(*)::int FROM today) AS posts,
+         (SELECT max(created_at) FROM today) AS last_at
+  FROM d
+`;
+
+function wholeCount(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function isoStamp(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/**
+ * 今天（站点本地日）公开信息的条数与最后一条的时间。
+ *
+ * 口径与信息流完全一致：只看可见结论、公开的 post / fastpost，修订链只算最新一版；
+ * 不扣掉「这个人自己关掉的卡」——它要说的是这个站今天发了多少，
+ * 不是「给我看的有多少」，所以访客与登录的人看到同一个数。
+ * `dayEndsAt` 一并给出：过了这个点客户端自己归零，不必知道站点在哪个时区。
+ *
+ * @param {string} timeZone 已校验的 IANA 名称，见 profile.js 的 siteTimeZone
+ * @returns {Promise<{ posts: number, lastPostAt: string | null, dayEndsAt: string } | null>}
+ */
+export async function countTodayIntel(pool, timeZone) {
+  const { rows } = await pool.query(TODAY_COUNT_SQL, [timeZone]);
+  const row = rows[0];
+  const dayEndsAt = isoStamp(row?.end_at);
+  // 没有日界就没有「今天」：宁可让顶栏显示「—」，也不要拿一个猜出来的日子去数。
+  if (!dayEndsAt) return null;
+  return {
+    posts: wholeCount(row.posts),
+    lastPostAt: isoStamp(row.last_at),
+    dayEndsAt,
+  };
 }
 
 export async function publicAuthor(pool, authorId) {

@@ -10,14 +10,18 @@ import RememberLoginCard from "../components/RememberLoginCard.vue";
 import SiteOwnerDialog from "../components/SiteOwnerDialog.vue";
 import XknotMark from "../components/XknotMark.vue";
 import { BackIcon, BellIcon, ClockIcon, CoinIcon, FriendsIcon, HelpIcon, SearchIcon, StarIcon, UserIcon } from "../icons/index.js";
-import { t } from "../i18n/index.js";
+import { locale, t } from "../i18n/index.js";
 import { canonicalUrl, pageTitle } from "../head.js";
+import { splitNumber, todayView } from "../today.js";
+import { compactCount } from "../format.js";
+import { clock } from "../time.js";
 import { listSponsors } from "../api.js";
 import { hasDraft, runningEntry, startReleaseWatch } from "../release.js";
 import { startPolling } from "../polling.js";
 import { useNotificationStore } from "../stores/notifications";
 import { useOutboxStore } from "../stores/outbox";
 import { useSessionStore } from "../stores/session";
+import { useTodayStore } from "../stores/today";
 import { internalHref } from "../links.js";
 
 const route = useRoute();
@@ -25,10 +29,15 @@ const router = useRouter();
 const notifications = useNotificationStore();
 const outbox = useOutboxStore();
 const session = useSessionStore();
+const today = useTodayStore();
 const updateReady = ref(false);
 let releaseWatch = null;
 let notificationsPoll = null;
+let todayPoll = null;
 const NOTIFICATIONS_POLL_MS = 30 * 1000;
+// 今日计数一分钟一问。比通知慢一档：它说的是「这个站今天有多少人在说话」，
+// 不是等人处理的消息，晚一分钟没有任何人吃亏，少下来的往返是实打实的。
+const TODAY_POLL_MS = 60 * 1000;
 // 站点名来自部署配置，顶栏正中显示；更长的名字由 CSS 截断。
 const siteName = computed(() => session.brandName);
 const mark = computed(() => Array.from(siteName.value)[0] || "K");
@@ -40,6 +49,20 @@ const searchInput = ref(null);
 const history = ref(readHistory());
 const sponsors = ref([]);
 const ownerDialog = ref(null);
+
+// 顶上那一行「今日」的数字在译文里的位置：各语种语序不同，先让译文标出来，
+// 模板只给这一段加粗（见 today.js 的 splitNumber）。
+const NUMBER_SLOT = "\u0000";
+const showToday = computed(() => session.canBrowse && session.site.publicBoard !== false);
+// clock 每分钟一跳：过了日界、或者最后一帖出了十五分钟的窗口，这一行自己就变了，
+// 不必等下一次取数。
+const todayState = computed(() => todayView(today.counts, clock.value));
+const todayLine = computed(() =>
+  todayState.value.known
+    ? splitNumber(t("nav.todayPosts", { n: NUMBER_SLOT }), NUMBER_SLOT)
+    : { before: t("nav.todayUnknown"), after: "" }
+);
+const todayPosts = computed(() => compactCount(todayState.value.posts, locale.value));
 
 function readHistory() {
   try {
@@ -138,7 +161,34 @@ watch(
   () => releaseWatch?.poke()
 );
 
+// 站点开关与会话晚于首帧到齐：第一次就赶上「不知道能不能浏览」，那一轮问不出去。
+// 条件一旦成立就补问一次，不必等到下一分钟。
+watch(
+  () => session.canBrowse && session.site.publicBoard !== false,
+  (ok) => {
+    if (ok) void today.poll();
+  }
+);
+
+// 自己刚发完一条：顶栏的数字立刻跟上，不用等下一轮。这和别人的新帖是两件事，
+// 但读的人看到的都是「刚刚多了」，不该差一分钟。
+watch(
+  () => outbox.revision,
+  (revision) => {
+    if (revision) void today.poll();
+  }
+);
+
 onMounted(() => {
+  // 首帧先用公开快照里的那一份，随后由轮询把数字走起来。
+  today.seed();
+  todayPoll = startPolling({
+    fn: () => today.poll(),
+    intervalMs: TODAY_POLL_MS,
+    immediate: true,
+    // 没有公开快照（或访客不能浏览）时没有这个数可问，别让一条必输的请求每分钟撞一次。
+    when: () => session.canBrowse && session.site.publicBoard !== false,
+  });
   // 首屏的未读数由 /api/web/home 一起带回来，这里不再单独取一次。
   // 轮询只要那个数字，不把整箱通知每 30 秒拖过一次隧道。
   notificationsPoll = startPolling({
@@ -174,6 +224,8 @@ onUnmounted(() => {
   releaseWatch = null;
   notificationsPoll?.stop();
   notificationsPoll = null;
+  todayPoll?.stop();
+  todayPoll = null;
 });
 </script>
 
@@ -201,9 +253,18 @@ onUnmounted(() => {
             class="site-title"
             :title="siteName"
             :aria-label="t('owner.open', { name: siteName })"
+            :aria-describedby="showToday ? 'site-today' : undefined"
             aria-haspopup="dialog"
             @click="openOwner"
-          >{{ siteName }}</button>
+          >
+            <span class="site-name">{{ siteName }}</span>
+            <!-- 这个站的今日脉搏：数字为主，标签为辅，脉冲点说明十五分钟内还有人发。
+                 整块仍在这一枚按钮里，点它还是打开主理人弹窗，不新增第二个点击目标。 -->
+            <span v-if="showToday" id="site-today" class="site-today" :class="{ 'is-live': todayState.live }">
+              <span class="site-today-dot" aria-hidden="true"></span>
+              <span class="site-today-count">{{ todayLine.before }}<b v-if="todayState.known">{{ todayPosts }}</b>{{ todayLine.after }}</span>
+            </span>
+          </button>
           <div class="header-side header-side-end">
             <AppButton v-if="session.canBrowse && session.storeEnabled" variant="icon" to="/store" :aria-label="t('nav.store')">
               <CoinIcon class="nav-icon" weight="header" aria-hidden="true" />

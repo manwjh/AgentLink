@@ -358,6 +358,12 @@ export function pollNotifications() {
   return request("/api/web/notifications?count=1");
 }
 
+// 同一件事用在「今日」上：一条只有计数的小 JSON，不为了一个数字把整份信息流拖过来。
+// 没有公开快照时服务端回 `{ counts: null }`（与「取失败」分开处理）。
+export function getToday() {
+  return request("/api/web/today");
+}
+
 export function readNotifications() {
   return request("/api/web/notifications/read", { method: "POST", body: "{}" });
 }
