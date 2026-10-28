@@ -88,6 +88,20 @@ test.describe("控制台", () => {
       await expect(page.locator(`.panel-head[data-panel="${panel}"] h2`)).toBeVisible();
     }
 
+    // 发信总闸：状态在 aria-checked 里。预览栈没配 SMTP，所以按不动，
+    // 面板要说明原因——按下去也发不出信，给个能按的开关就是骗人。
+    const mailSwitch = page.locator('button.mail-switch[role="switch"]');
+    await expect(mailSwitch).toBeVisible();
+    await expect(mailSwitch).toHaveAttribute("aria-checked", "true");
+    await expect(mailSwitch).toBeDisabled();
+    await expect(page.locator(".panel-note", { hasText: "没配 SMTP" })).toBeVisible();
+
+    // 队列只有状态机能产出的两个分类：多出来的入口点进去没有对应标签，
+    // 会落在一个既无高亮、也无说明的空列表上。
+    await expect(page.locator(".queue-row")).toHaveCount(2);
+    await expect(page.locator('.queue-row[data-status="approved"]')).toBeVisible();
+    await expect(page.locator('.queue-row[data-status="withdrawn"]')).toBeVisible();
+
     // 队列行把运营直接送到对应的申请分类。
     await page.locator('.queue-row[data-status="approved"]').click();
     await expect(page.locator(".tabs")).toBeVisible();

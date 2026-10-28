@@ -1246,6 +1246,39 @@ a {
   text-align: right;
 }
 
+/* 发信总闸：一个 role="switch" 的按钮，状态写在 aria-checked。
+   比面板里的主按钮矮一档，免得一个开关键把整行撑得和自己等高。 */
+.mail-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  min-height: 26px;
+  padding: 0.1rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.mail-switch.on {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.mail-switch.off {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.mail-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .events {
   display: flex;
   flex-direction: column;

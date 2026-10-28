@@ -147,6 +147,9 @@ const state = {
   manifest: null,
   manifestId: null,
   copied: false,
+  // 发信总闸正在写库。写的过程中按钮不可点：连点两下会让第二次请求带着
+  // 前一次的界面状态发出去，最后落库的未必是用户以为的那一下。
+  mailBusy: false,
 };
 
 // 每次读取带一个序号。晚到的旧响应直接丢掉，避免它把刚点开的分类又重绘回去。
@@ -519,7 +522,7 @@ function renderInstanceConfig(row, id) {
       ]),
       el(
         "button",
-        { type: "button", class: "btn", onclick: () => startEditing(row) },
+        { type: "button", class: "btn", "data-action": "edit", onclick: () => startEditing(row) },
         "编辑"
       ),
     ]),
@@ -722,7 +725,11 @@ function renderInstanceForm(row, config, id) {
       )
     : null;
 
-  const save = el("button", { type: "submit", class: "btn btn-ok" }, editing.busy ? "保存中…" : "保存");
+  const save = el(
+    "button",
+    { type: "submit", class: "btn btn-ok", "data-action": "save" },
+    editing.busy ? "保存中…" : "保存"
+  );
   save.disabled = editing.busy;
   const cancel = el(
     "button",
@@ -901,6 +908,8 @@ function renderTop() {
       {
         type: "button",
         class: `view-tab${state.view === key ? " active" : ""}`,
+        // data-view 是浏览器测试的稳定钩子：文案会改，这个不会。
+        "data-view": key,
         onclick: () => switchView(key),
       },
       [label, badge ? el("strong", {}, String(badge)) : null]
@@ -930,6 +939,7 @@ function renderTop() {
       el("button", {
         type: "button",
         class: "btn",
+        "data-action": "logout",
         onclick: async () => {
           await api("/api/admin/logout", { method: "POST" }).catch(() => {});
           state.admin = null;
@@ -1027,12 +1037,15 @@ function renderOverview() {
       })
     : el("p", { class: "empty" }, "清单里还没有实例。");
 
-  const queueKeys = ["approved", "withdrawn", "rejected", "expired"];
+  // 队列只给状态机能产出的两个分类。`rejected` / `expired` 没有任何写入路径
+  // （见 server/store.mjs 的 TRANSITIONS），它们只可能是历史行；历史行在
+  // 「全部」里带徽章照常出现，不必为此常驻两个永远为 0 的入口。
+  const queueKeys = ["approved", "withdrawn"];
   const queue = el(
     "div",
     { class: "queue" },
     queueKeys.map((key) =>
-      el("button", { type: "button", class: "queue-row", onclick: () => openApplications(key) }, [
+      el("button", { type: "button", class: "queue-row", "data-status": key, onclick: () => openApplications(key) }, [
         el("span", {}, STATUS_LABEL[key]),
         el("strong", {}, String(apps.counts[key] || 0)),
       ])
@@ -1112,7 +1125,7 @@ function renderOverview() {
     el("div", { class: "ov-grid" }, [
       el("div", { class: "ov-col" }, [
         el("section", { class: "panel" }, [
-          el("div", { class: "panel-head" }, [
+          el("div", { class: "panel-head", "data-panel": "instances" }, [
             el("h2", {}, "实例与探测"),
             el("span", { class: "meta" }, inst.checkedAt ? `上次探测 ${relativeLabel(inst.checkedAt)}` : "未探测"),
           ]),
@@ -1122,7 +1135,7 @@ function renderOverview() {
       ]),
       el("div", { class: "ov-col" }, [
         el("section", { class: "panel" }, [
-          el("div", { class: "panel-head" }, [
+          el("div", { class: "panel-head", "data-panel": "applications" }, [
             el("h2", {}, "申请记录"),
             el("button", { type: "button", class: "link-btn", onclick: () => openApplications("all") }, "查看全部"),
           ]),
@@ -1138,10 +1151,32 @@ function renderOverview() {
             : null,
         ]),
         el("section", { class: "panel" }, [
-          el("div", { class: "panel-head" }, [el("h2", {}, "发信")]),
+          el("div", { class: "panel-head", "data-panel": "mail" }, [el("h2", {}, "发信")]),
+          el("div", { class: "mail-line" }, [
+            el("span", {}, "发信总闸"),
+            el(
+              "button",
+              {
+                type: "button",
+                // role="switch" 是给读屏用的：状态在 aria-checked 里，文字只是外观。
+                class: `mail-switch ${mail.switch === "off" ? "off" : "on"}`,
+                role: "switch",
+                "aria-checked": mail.switch === "off" ? "false" : "true",
+                // 没配 SMTP 时按下去也发不出信，索性不给按，理由写在 title 与面板注释里。
+                disabled: state.mailBusy || !mail.configured,
+                title: mail.configured ? "" : "先配 SMTP_HOST 与 MAIL_FROM",
+                onclick: () => toggleMail(mail.switch === "off"),
+              },
+              state.mailBusy ? "写入中…" : mail.switch === "off" ? "已关" : "开"
+            ),
+          ]),
           el("div", { class: "mail-line" }, [
             el("span", {}, "伙伴与内部信"),
-            el("span", { class: "mono" }, mail.enabled ? "SMTP 已配置" : "未配置"),
+            el(
+              "span",
+              { class: "mono" },
+              mail.switch === "off" ? "总闸已关" : mail.configured ? "SMTP 已配置" : "未配置"
+            ),
           ]),
           el("div", { class: "mail-line" }, [
             el("span", {}, "24 小时"),
@@ -1149,15 +1184,32 @@ function renderOverview() {
           ]),
           el("div", { class: "mail-line" }, [
             el("span", {}, "委托发信"),
-            el("span", { class: "mono" }, relay.enabled ? "已开启" : "未开启"),
+            el("span", { class: "mono" }, relay.enabled ? "已开启" : relay.envOff ? "环境变量已关" : "未开启"),
           ]),
           el("div", { class: "mail-line" }, [
             el("span", {}, "最近一封"),
             el("span", { class: "mono" }, mail.lastAt ? relativeLabel(mail.lastAt) : "—"),
           ]),
+          mail.switch === "off"
+            ? el(
+                "p",
+                { class: "panel-note warn" },
+                "总闸关着：伙伴信、内部告警、成员登录码与委托发信一起停，直接调 notify 也会被拒。"
+              )
+            : null,
+          !mail.configured
+            ? el("p", { class: "panel-note warn" }, "没配 SMTP：先填 SMTP_HOST 与 MAIL_FROM，总闸才能按。")
+            : null,
+          relay.envOff
+            ? el(
+                "p",
+                { class: "panel-note warn" },
+                "代发被环境变量关掉了（XKNOT_RELAY_ENABLED=0）：总闸开着，实例仍会拿到 503。"
+              )
+            : null,
         ]),
         el("section", { class: "panel" }, [
-          el("div", { class: "panel-head" }, [el("h2", {}, "最近事件")]),
+          el("div", { class: "panel-head", "data-panel": "events" }, [el("h2", {}, "最近事件")]),
           events,
         ]),
       ]),
@@ -1198,6 +1250,7 @@ function renderApplications() {
       {
         type: "button",
         class: `tab${state.filter === key ? " active" : ""}`,
+        "data-status": key,
         disabled: loading,
         onclick: () => {
           state.filter = key;
@@ -1221,7 +1274,13 @@ function renderApplications() {
     // 继续显示会让运维把它当成这次读到的东西，所以这里一行都不渲染。
     list = el("div", { class: "load-error" }, [
       el("p", { class: "alert", role: "alert" }, state.applicationsError),
-      el("button", { type: "button", class: "btn", disabled: loading, onclick: () => loadApplications() }, "重试"),
+      el("button", {
+        type: "button",
+        class: "btn",
+        "data-action": "retry",
+        disabled: loading,
+        onclick: () => loadApplications(),
+      }, "重试"),
     ]);
   } else if (rows.length) {
     list = el(
@@ -1238,7 +1297,11 @@ function renderApplications() {
           },
           [
             el("span", { class: "item-name" }, item.name),
-            el("span", { class: `badge ${item.status}` }, STATUS_LABEL[item.status] || item.status),
+            el(
+              "span",
+              { class: `badge ${item.status}`, "data-status": item.status },
+              STATUS_LABEL[item.status] || item.status
+            ),
             el("span", { class: "item-url" }, item.url),
             el("span", { class: "item-meta" }, [
               item.id,
@@ -1280,7 +1343,7 @@ function renderDetail(item) {
         el("h2", {}, item.name),
         el("p", { class: "detail-id" }, `${item.id} · 提交于 ${formatWhen(item.createdAt)}`),
       ]),
-      el("span", { class: `badge ${item.status}` }, STATUS_LABEL[item.status] || item.status),
+      el("span", { class: `badge ${item.status}`, "data-status": item.status }, STATUS_LABEL[item.status] || item.status),
     ]),
 
     el("dl", { class: "dl" }, [
@@ -1321,6 +1384,7 @@ function renderDetail(item) {
             el("button", {
               type: "button",
               class: "btn",
+              "data-action": "manifest",
               disabled: state.busy,
               onclick: async () => {
                 state.busy = true;
@@ -1363,7 +1427,15 @@ function renderDetail(item) {
               ])
             : null,
         ])
-      : el("p", { class: "hint" }, "这份申请已撤回，只在库里留档。"),
+      : // 兜底文案跟着状态走。以前这里写死「已撤回」，于是从「全部」里点开一条
+        // 拒绝或过期的历史记录，界面也说是撤回——状态说错了，就是假信息。
+        el(
+          "p",
+          { class: "hint" },
+          item.status === "withdrawn"
+            ? "这份申请已撤回，只在库里留档。"
+            : `这条记录的状态是「${STATUS_LABEL[item.status] || item.status}」，只读留档，不再接受操作。`
+        ),
 
     state.error ? el("p", { class: "alert", role: "alert" }, state.error) : null,
   ]);
@@ -1375,6 +1447,33 @@ async function select(item) {
   state.manifest = null;
   state.copied = false;
   render();
+}
+
+async function toggleMail(enabled) {
+  if (state.mailBusy) return;
+  state.mailBusy = true;
+  state.overviewError = "";
+  render();
+  try {
+    await api("/api/admin/mail", { method: "POST", body: JSON.stringify({ enabled }) });
+  } catch (error) {
+    state.mailBusy = false;
+    if (error.status === 401) {
+      state.admin = null;
+      state.overview = null;
+      state.editing = null;
+      closeInstancePanel();
+      render();
+      return;
+    }
+    state.overviewError = "发信总闸没有改成功，请稍后再试。";
+    render();
+    return;
+  }
+  state.mailBusy = false;
+  // 重新读一遍再画：开着总闸也可能因为环境变量或没配 SMTP 仍然发不出去，
+  // 界面要照服务端说的显示，不按这次点击想当然地画成「已开」。
+  await loadOverview();
 }
 
 async function loadOverview() {

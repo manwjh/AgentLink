@@ -96,7 +96,9 @@ test("未登录时只有邮箱一格，加入方式是四步说明", async ({ pa
   const steps = page.locator("aside#join ol.steps li");
   await expect(steps).toHaveCount(4);
   await expect(steps.nth(0).locator(".step-title")).toHaveText(zhCN.join.step1);
-  await expect(steps.nth(2).locator(".step-desc")).toContainText("提交后平台当场核对通过");
+  // 第三步是「等待连通」：提交即通过，后续由中枢自动接通，不再是「等审核」。
+  await expect(steps.nth(2).locator(".step-title")).toHaveText(zhCN.join.step3);
+  await expect(steps.nth(2).locator(".step-desc")).toContainText("配置和验证");
   await expect(page.locator('a.step-link[href*="github.com/manwjh/AgentLink"]')).toBeVisible();
   await expect(page.locator("code.inline-code")).toContainText("/admin");
 
