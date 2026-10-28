@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { assertPublicUrl, FetchGuardError, readLimited, resolveHosts } from "./fetch-guard.mjs";
 import { probeTargetOf } from "./probe-target.mjs";
+import { mapWithConcurrency } from "./lib/concurrency.mjs";
 import { invokedDirectly } from "./lib/main-module.mjs";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
@@ -328,20 +329,6 @@ export async function run(options = {}) {
     await rename(tmp, outPath);
   }
   return { ...output, notices };
-}
-
-async function mapWithConcurrency(items, limit, fn) {
-  const results = new Array(items.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await fn(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function parseArgs(argv) {

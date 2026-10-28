@@ -516,6 +516,7 @@ M2's two steps both run at build time, entered at `ops/fetch-cards.mjs` and `ops
 - Runs URL checks and content cleaning per [FEDERATION.md](FEDERATION.md) sections 5.6, 6.6.
 - Validates `formatVersion` (showcase), card count, field lengths, image hosts, and count types.
 - Carries the previous `ETag`; on `304` the file is untouched.
+- Fetches with a bounded fan-out and a per-round budget: at most four partners in flight, and a whole round gives up after 90 s. A partner still unanswered when the budget runs out is recorded as `skipped budget` and picked up next round; the round still returns every other result instead of being killed by the oneshot timeout. `--budget-ms` overrides it (`0` means no limit).
 - On success atomically overwrites `var/cards/{id}.json` or `var/stats/{id}.json`, on failure keeps the previous copy.
 - Same step as the health probe; `--offline` skips both together.
 

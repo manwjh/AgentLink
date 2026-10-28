@@ -11,11 +11,13 @@ import { fileURLToPath } from "node:url";
 
 import {
   FetchGuardError,
+  DEFAULT_TIMEOUT_MS,
   PROFILE_MAX_BYTES,
   safeGetJson,
   writeJsonAtomic,
 } from "./fetch-guard.mjs";
 import { cleanSite, FORMAT_VERSION, ID_RE, isHttpsUrl } from "./profile-schema.mjs";
+import { createBudget, FETCH_BUDGET_MS, FETCH_CONCURRENCY, mapWithConcurrency } from "./lib/concurrency.mjs";
 import { invokedDirectly } from "./lib/main-module.mjs";
 
 export { FORMAT_VERSION };
@@ -105,7 +107,9 @@ export async function run(options = {}) {
     outDir = path.join(here, "..", "var", "profiles"),
     fetchImpl = fetch,
     resolve,
-    timeoutMs,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    concurrency = FETCH_CONCURRENCY,
+    budgetMs = FETCH_BUDGET_MS,
     only = null,
     now = () => new Date(),
     log = () => {},
@@ -116,58 +120,63 @@ export async function run(options = {}) {
     throw new Error(`cannot read instances: ${instancesPath}`);
   }
 
-  const results = [];
-  for (const instance of manifest.instances) {
-    if (!instance?.id) continue;
-    // id 会拼进输出文件名：带 / 或 .. 的条目不落盘，跳过并记账。
-    if (!ID_RE.test(instance.id)) {
-      results.push({ id: instance.id, status: "skipped", reason: "bad_id" });
-      continue;
-    }
-    if (only && instance.id !== only) continue;
-    if (instance.status && instance.status !== "active") {
-      results.push({ id: instance.id, status: "skipped", reason: "inactive" });
-      continue;
-    }
+  // 一轮只花一份预算：单项超时管「这一项失败」，预算管「这一轮能不能交付」。
+  const budget = createBudget(budgetMs);
 
-    const file = path.join(outDir, `${instance.id}.json`);
-    const previous = await readJson(file);
-    const target = `${String(instance.url || "").replace(/\/$/, "")}/api/federation/profile`;
-    try {
-      const response = await safeGetJson(target, {
-        fetchImpl,
-        resolve,
-        timeoutMs,
-        maxBytes: PROFILE_MAX_BYTES,
-        etag: previous?.etag || null,
-      });
-      if (response.status === 304) {
-        results.push({ id: instance.id, status: "unchanged" });
-        continue;
+  // 结果按清单顺序返回，与并发无关：日志和控制台的顺序不能随网络快慢变。
+  const results = (
+    await mapWithConcurrency(manifest.instances, concurrency, async (instance) => {
+      if (!instance?.id) return null;
+      // id 会拼进输出文件名：带 / 或 .. 的条目不落盘，跳过并记账。
+      if (!ID_RE.test(instance.id)) {
+        return { id: instance.id, status: "skipped", reason: "bad_id" };
       }
-      const checked = cleanProfilePayload(response.body, { instance });
-      if (!checked.ok) {
-        results.push({ id: instance.id, status: "invalid", problems: checked.problems });
-        continue;
+      if (only && instance.id !== only) return null;
+      if (instance.status && instance.status !== "active") {
+        return { id: instance.id, status: "skipped", reason: "inactive" };
       }
-      await writeJsonAtomic(file, {
-        ...checked.payload,
-        source: response.url,
-        etag: response.etag || null,
-        fetchedAt: now().toISOString(),
-      });
-      results.push({ id: instance.id, status: "ok", problems: checked.problems });
-    } catch (error) {
-      // 写不进去和取不回来是两件事：权限类错误要单独归类，别都报「不可达」。
-      const code =
-        error instanceof FetchGuardError
-          ? error.code
-          : error?.code === "EACCES" || error?.code === "EPERM" || error?.code === "EROFS"
-            ? "profile_dir_not_writable"
-            : "unreachable";
-      results.push({ id: instance.id, status: "failed", error: code });
-    }
-  }
+
+      const file = path.join(outDir, `${instance.id}.json`);
+      const previous = await readJson(file);
+      // 预算用尽：这一项不发请求，记下来等下一轮。整轮照常交付其余结果。
+      const slice = budget.timeoutFor(timeoutMs);
+      if (slice == null) return { id: instance.id, status: "skipped", reason: "budget" };
+
+      const target = `${String(instance.url || "").replace(/\/$/, "")}/api/federation/profile`;
+      try {
+        const response = await safeGetJson(target, {
+          fetchImpl,
+          resolve,
+          timeoutMs: slice,
+          maxBytes: PROFILE_MAX_BYTES,
+          etag: previous?.etag || null,
+        });
+        if (response.status === 304) {
+          return { id: instance.id, status: "unchanged" };
+        }
+        const checked = cleanProfilePayload(response.body, { instance });
+        if (!checked.ok) {
+          return { id: instance.id, status: "invalid", problems: checked.problems };
+        }
+        await writeJsonAtomic(file, {
+          ...checked.payload,
+          source: response.url,
+          etag: response.etag || null,
+          fetchedAt: now().toISOString(),
+        });
+        return { id: instance.id, status: "ok", problems: checked.problems };
+      } catch (error) {
+        // 写不进去和取不回来是两件事：权限类错误要单独归类，别都报「不可达」。
+        const code =
+          error instanceof FetchGuardError
+            ? error.code
+            : error?.code === "EACCES" || error?.code === "EPERM" || error?.code === "EROFS"
+              ? "profile_dir_not_writable"
+              : "unreachable";
+        return { id: instance.id, status: "failed", error: code };
+      }
+    })
+  ).filter(Boolean);
 
   for (const result of results) {
     const extra =
@@ -177,9 +186,11 @@ export async function run(options = {}) {
           : ""
         : result.error
           ? ` ${result.error}`
-          : result.problems?.length
-            ? ` ${result.problems[0]}`
-            : "";
+          : result.reason
+            ? ` ${result.reason}`
+            : result.problems?.length
+              ? ` ${result.problems[0]}`
+              : "";
     log(`${String(result.id).padEnd(16)} ${result.status}${extra}`);
   }
   return results;
@@ -192,6 +203,7 @@ function parseArgs(argv) {
     if (name === "--instances") args.instancesPath = argv[++index];
     else if (name === "--out-dir") args.outDir = argv[++index];
     else if (name === "--only") args.only = argv[++index];
+    else if (name === "--budget-ms") args.budgetMs = argv[++index];
   }
   return args;
 }
