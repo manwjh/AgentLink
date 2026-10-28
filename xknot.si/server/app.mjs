@@ -31,6 +31,7 @@ import {
 import { RELAY_LIMITS, domainOf, relayMessage, validateRelayRequest } from "./relay.mjs";
 import { ipHash, normalizeUsername } from "./store.mjs";
 import { summarizeTraffic } from "./traffic-view.mjs";
+import { HUB_TRAFFIC_ID } from "../ops/traffic.mjs";
 import { LIMITS, normalizePublicKey, validEmail, validateApplication } from "./validate.mjs";
 
 const BODY_LIMIT = 16 * 1024;
@@ -1610,6 +1611,20 @@ export function createApp({ store, config }) {
         // 以日志里记录的 host 为准：它才是流量真正落在哪个子域上，
         // 清单地址变了（或带端口）也不至于对不上聚合文件。
         host: view?.host || hostOf(instance.url) || "",
+        updatedAt: view?.updatedAt || null,
+        days: view?.days || [],
+        totals: view?.totals || null,
+      });
+    }
+
+    // 门户自己的入口流量。门户不是实例、清单里没有它，所以单开一条只读路由；
+    // 数据来自同一个聚合器写下的 var/traffic/hub.json。
+    if (route === "/api/admin/hub/traffic" && method === "GET") {
+      const view = summarizeTraffic(readTraffic(HUB_TRAFFIC_ID));
+      const federation = readFederation();
+      return send(res, 200, {
+        id: HUB_TRAFFIC_ID,
+        host: view?.host || String(federation?.hub || ""),
         updatedAt: view?.updatedAt || null,
         days: view?.days || [],
         totals: view?.totals || null,

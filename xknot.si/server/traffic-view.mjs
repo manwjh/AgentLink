@@ -4,6 +4,8 @@
 // IP、原始 UA 与完整 referer。这一层只做「白名单挑字段 + 限量」：聚合产物以后多出
 // 来的内部字段不会自动出现在控制台上，天数和 Top 列表也不会随文件无限变长。
 
+import { CRAWLER_KEYS, SEARCH_ENGINE_KEYS } from "../ops/traffic.mjs";
+
 // 与 ops/traffic.mjs 的 DEFAULT_DAYS 对齐：那边保留 30 天，这边最多也读 30 天。
 export const MAX_DAYS = 30;
 const MAX_TOP = 8;
@@ -39,6 +41,15 @@ function topOf(rows, key) {
     .map((row) => ({ key: row[key].slice(0, 200), requests: count(row.requests) }));
 }
 
+// 固定键的计数 → 有序列表。只留非零项：零值在「爬虫 / 搜索引荐」里不传递信息，
+// 但当天一条都没有时仍要给出稳定结构，所以对象形式在 crawlers 里保留全部键。
+function rankedOf(raw, keys) {
+  return keys
+    .map((key) => ({ key, requests: count(raw?.[key]) }))
+    .filter((entry) => entry.requests > 0)
+    .sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
+}
+
 // 一天 → 控制台可用的字段。日期不合法的整条丢掉：它没法排序，也没法标在横轴上。
 export function normalizeDay(raw) {
   if (!raw || typeof raw !== "object") return null;
@@ -63,6 +74,12 @@ export function normalizeDay(raw) {
     // 同一天内按 IP+UA 去重，跨天不去重：这是「日访客」的近似值，不是月度独立访客。
     uniqueApprox: count(raw.uniqueApprox),
     botShare: ratio(raw.botShare),
+    // 搜索引擎爬虫：从 botShare 里拆出来的抓取侧信号。
+    crawlers: buckets(raw.crawlers, CRAWLER_KEYS),
+    crawlStatus: buckets(raw.crawlStatus, ["2xx", "3xx", "4xx", "5xx"]),
+    crawlPaths: topOf(raw.crawlPaths, "path"),
+    // 搜索引荐：谁把访客送进来的，只到引擎这一层，没有查询词。
+    searchEngines: rankedOf(raw.searchEngines, SEARCH_ENGINE_KEYS),
     topPaths: topOf(raw.topPaths, "path"),
     topReferers: topOf(raw.topReferers, "host"),
   };

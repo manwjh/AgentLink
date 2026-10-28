@@ -1493,6 +1493,55 @@ test("api: instance traffic returns the daily aggregate behind the panel", async
   assert.equal("ip" in response.data.days[0], false);
 });
 
+// 门户不是实例，但有自己的一份流量：单开一条只读路由，未登录同样拒绝。
+test("api: hub traffic reads the portal's own aggregate", async (t) => {
+  const { call, store } = await start(t, {
+    instances: [{ id: "alpha", url: "https://alpha.xknot.si", tier: "free", status: "active" }],
+    federation: { hub: "xknot.si" },
+    traffic: {
+      hub: {
+        id: "hub",
+        host: "xknot.si",
+        updatedAt: "2026-10-26T11:00:00.000Z",
+        days: [
+          {
+            date: "2026-10-26",
+            requests: 40,
+            bytes: 8192,
+            crawlers: { googlebot: 5 },
+            crawlStatus: { "2xx": 5 },
+            crawlPaths: [{ path: "/en/instances/", requests: 5 }],
+            searchEngines: { google: 2 },
+          },
+        ],
+      },
+    },
+  });
+
+  const anonymous = await call("/api/admin/hub/traffic");
+  assert.equal(anonymous.status, 401);
+
+  const cookie = await loginAs(call, store);
+  const response = await call("/api/admin/hub/traffic", { cookie });
+  assert.equal(response.status, 200);
+  assert.equal(response.data.id, "hub");
+  assert.equal(response.data.host, "xknot.si");
+  assert.equal(response.data.days[0].crawlers.googlebot, 5);
+  assert.equal(response.data.days[0].crawlers.bingbot, 0);
+  assert.deepEqual(response.data.days[0].crawlPaths, [{ key: "/en/instances/", requests: 5 }]);
+  assert.deepEqual(response.data.days[0].searchEngines, [{ key: "google", requests: 2 }]);
+});
+
+test("api: hub traffic without a file answers with no days, host from the roster", async (t) => {
+  const { call, store } = await start(t, { federation: { hub: "xknot.si" } });
+  const cookie = await loginAs(call, store);
+  const response = await call("/api/admin/hub/traffic", { cookie });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.data.days, []);
+  assert.equal(response.data.totals, null);
+  assert.equal(response.data.host, "xknot.si");
+});
+
 test("api: an instance without a traffic file answers with an empty list", async (t) => {
   const { call, store } = await start(t, {
     instances: [{ id: "alpha", url: "https://alpha.xknot.si", tier: "free", status: "active" }],

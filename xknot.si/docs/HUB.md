@@ -12,7 +12,7 @@ Contract in [FEDERATION.md](FEDERATION.md), system map in [ARCHITECTURE.md](ARCH
 | Application storage | SQLite | `var/xknot.db`, tables `applications`, `admins`, `sessions`, `member_codes`, `member_sessions`, `events`, `claim_tokens`, `notify_log`, `relay_tokens`, `relay_switches`, `relay_log`, `provision_runs` |
 | Health probe | build step + scheduled patrol | one probe at build time; `ops/watch-health.mjs` every 15 minutes, writes `var/health.json` and mails by consecutive duration |
 | Activity data fetch | build step | fetches `statsUrl` at build time, writes `var/stats/{id}.json` |
-| Entry traffic | hourly aggregation | reads the entry nginx access log, writes `var/traffic/{id}.json` per subdomain; console-only |
+| Entry traffic | hourly aggregation | reads the entry nginx access log, writes `var/traffic/{id}.json` per subdomain plus `var/traffic/hub.json` for the portal itself; console-only |
 | Node status | synthesized document | `ops/node-status.mjs` merges probe, tunnel peer, location, and traffic into `var/status.json`; the console reads this one |
 | Site profile fetch | build step + republish loop | fetches `url` + `/api/federation/profile`, writes `var/profiles/{id}.json`; a failed fetch keeps the previous copy |
 | Data snapshot | build step + republish loop | merges manifest (issued zone), profile copies (self-described zone), probes, activity data, and showcase, writes `dist/data/hub.json` |
@@ -106,7 +106,8 @@ xknot.si/
 │   ├── xknot-republish.service  portal snapshot recompute unit (oneshot)
 │   ├── xknot-republish.timer    portal snapshot recompute timer (every 10 minutes)
 │   ├── build-hub-data.mjs       merges manifest, probes, activity data, and showcase, writes data/hub.json
-│   ├── build-seo.mjs            crawl entry: robots, sitemap, and three script-free instance directories
+│   ├── build-seo.mjs            crawl entry: robots, sitemap, three script-free instance directories, verification meta
+│   ├── seo-check.mjs            post-deploy crawl check: robots, sitemap, canonical, hreflang, structured data
 │   ├── doc-page.mjs             shared doc page: markdown → single-page HTML + raw text, shared by all static docs on the portal
 │   ├── render-knot-help.mjs     publishes repo-root docs/KNOT_HELP.md to /knot-help and /knot-help.md
 │   ├── build-federation-map.mjs generates the federation map diagram (repo-root docs/knot-federation-map.svg)
@@ -173,6 +174,7 @@ npm run api           # starts only the API
 npm run build         # validate, probe, build, write snapshot, crawl entry, output in web/dist
 npm run build:preview # merges sample entries for layout preview, not for publishing
 npm run verify        # re-checks dist/data/hub.json's instances against instances.json
+npm run seo:check     # post-deploy crawl check against the live site (exit 1 on any failure)
 npm run republish     # recomputes only data/hub.json (no bundling, no assets), runtime use
 npm run validate      # both manifest + roster validation
 npm run test          # unit tests (manifest, roster, page logic, API, and mail)
@@ -328,6 +330,27 @@ The portal home page is a single-page shell: a crawler that does not run JS sees
 | `/sitemap.xml` | the three locale entries, the instance directory, and `/knot-help` |
 
 The directory reads `dist/data/hub.json`, the same data as the portal; entries with `health.hidden` are skipped, and only `https` site addresses are kept. The origin defaults to `https://xknot.si` and can be overridden with `--origin` or `XKNOT_HUB_ORIGIN` (a local build writes it into `canonical` and the sitemap).
+
+### 3.4 Search-console verification
+
+Impressions, clicks, and query terms exist only in the search engines' own webmaster consoles; no server-side log can recover them. What the site has to supply is a proof of ownership, and of the three accepted proofs, the meta tag is the only one that needs nothing outside the repo: no DNS record, no oddly named file at the root.
+
+`var/search-verify.json` (never in version control) holds the tokens:
+
+```json
+{ "google": "<token>", "bing": "<token>", "baidu": "<token>", "yandex": "<token>" }
+```
+
+`ops/build-seo.mjs` reads it (`--verify <path>`, or `XKNOT_SEARCH_VERIFY`, default `var/search-verify.json`), and injects one `<meta>` per configured engine into the root redirect page, every locale home page, and every directory page, inside a `<!-- knot-verify -->` block so that repeated builds replace rather than stack. The root page matters: Search Console verifies the URL prefix you entered, so that exact URL has to deliver the tag itself. `ops/xknot.si.conf` therefore serves the jump page at `/` with `try_files /index.html` instead of a `302 /en/` — behind a redirect the file was never delivered, and a check that follows redirects would be inspecting `/en/` while claiming to inspect `/`. A missing file means nothing configured and is not an error; an unknown key or a token outside `[A-Za-z0-9._\-+/=]` fails the build, because a silently ignored typo yields pages that look injected and verify nothing. Only the engines listed in `VERIFY_ENGINES` are accepted: `google` → `google-site-verification`, `bing` → `msvalidate.01`, `baidu` → `baidu-site-verification`, `yandex` → `yandex-verification`.
+
+Two property types, and the choice is fixed per property:
+
+- **URL prefix** (`https://xknot.si/`): verified by the meta tag above. Needs no DNS access, and each engine can be added on its own.
+- **Domain** (`xknot.si`): verified **only** by a DNS TXT record; the meta tag does nothing for it. It also covers every partner subdomain, folding their index data into the hub's property.
+
+Prefer URL prefix unless owning the whole zone is the point. For a Domain property, add one TXT record at the apex, quoted, beside the existing SPF record — `"google-site-verification=<token>"` — then confirm with `node ops/seo-check.mjs --dns` (or `npm run seo:check -- --dns`), which queries authoritative DNS directly and fails when the record is absent. Put it in the zone that actually serves the domain: a record added to a stale or delegated-away zone resolves nowhere, and the console only says so after another retry cycle.
+
+After deploying, `npm run seo:check` (or `node ops/seo-check.mjs --origin <site>`) requests the live site and reports what does not hold: robots rules and its sitemap line, every sitemap URL returning 200 `text/html`, per-locale canonical pointing at itself, the full hreflang set, a title and description, no stray `noindex`, `CollectionPage` structured data on the directory, the configured verification meta matching the local token, and `/knot-help` answering. `--dns` adds the Domain property's TXT record, and only then — a property accepts one verification type, so guessing which one was created would produce a pass that the console still rejects. Exit code is 1 on any failure, so it can hang off a deploy. It reads no local files besides the token file — a black-box check, same command for staging and production.
 
 ## 4. Pages
 
@@ -777,6 +800,8 @@ The end of the right column's "how to join" states the operator's name and email
 | `POST /api/admin/logout` | session | delete the current session |
 | `GET /api/admin/session` | session | current admin |
 | `GET /api/admin/overview` | session | overview summary: instances and per-account config, probes, application records, 24h mail, and recent events; each instance carries `location` (observed location, `{ country, at, source }` or `null`), side by side with the self-described `regions`. `mail` reports separately `switch` (`on` / `off`), `configured`, `enabled` (whether sending now); `relay.envOff` means the env var turned off relay alone |
+| `GET /api/admin/instances/:id/traffic` | session | one instance's entry traffic: the last 30 days of daily aggregates (requests, bytes, status, cache, latency, upstream, daily unique visitors, bot share, search crawlers, paths fetched by those crawlers, search referrals, top paths, top referer hosts); an id outside the manifest is 404; empty `days` means not collected yet |
+| `GET /api/admin/hub/traffic` | session | the portal's own entry traffic, same daily shape as an instance; reads `var/traffic/hub.json`, falls back to the roster's `hub` for the hostname; empty `days` means not collected yet |
 | `POST /api/admin/mail` | session | mail master switch: `{ enabled: true \| false }`, writes `settings.mail` and takes effect immediately |
 | `POST /api/admin/instances/:id/config` | session | change instance config: `{ instance, member }` two patches, whole-file validation then atomic write-back to `instances.json` and `federation.json`; illegal returns 400 + `fields[]` |
 | `GET /api/admin/applications?status=` | session | list and per-status counts (`approved` / `withdrawn` / `rejected` / `expired`) |
@@ -968,14 +993,18 @@ All subdomains' public traffic goes through one entry nginx — static served di
 
 The precondition is the entry having the log format installed: `knot-platform/ops/entry/log.conf.template` defines `log_format knot_json`, and `site.conf.template` writes one `access_log /var/log/nginx/knot-access.log knot_json;` per server block. It is installed once per entry host, by `push-entry.sh`.
 
+The portal's own conf (`ops/xknot.si.conf`) carries that same line. Without it its server block inherits `nginx.conf`'s default `main` format, which records no `$host`: aggregation can then map nothing, `hub.json` is never written, and the hourly run still exits successfully — a silent hole rather than an error. Because it references a format declared by the entry, that conf depends on `knot-log.conf` being installed on the same host.
+
 Subdomains issued by automatic provisioning do not go through `push-entry.sh`, so `server/provision.mjs` carries the set itself: `renderVhost` **declares** a per-subdomain unique format in each conf (`knot_json_<subdomain>`, dots written as underscores), then writes `access_log ... <that name>` in the 443 server. It does not share `knot-log.conf` because `conf.d/*.conf` includes by filename: the shared file sorts after `cpswang.xknot.si.conf`, where the `knot_json` it declares does not yet exist in that file, so `nginx -t` reports `unknown log format`. Missing this line leaves a new node's "entry traffic" as "never collected".
 
 These confs are generated on a remote host whose only check is a single `nginx -t`, so their exact text is pinned as fixtures: `server/fixtures/{http-stage,entry-static,entry-proxied}.conf`, plus the placeholder page and the sshd block. `server/provision.golden.test.mjs` compares the whole rendering byte for byte and prints a line diff when they differ, so a template change shows up in review instead of arriving unannounced on the entry host. Changing one on purpose means `node server/fixtures/render-golden.mjs --write`, with that diff committed alongside the code.
 
 - The query string is never logged: share tokens and search terms must not enter the log.
 - `$host` is the only subdomain identifier, mapped to id by `instances.json` on the aggregation side; hosts outside the manifest are counted but not written.
+- The portal is the exception: its hostname comes from `federation.json`'s `hub`, and it lands in `var/traffic/hub.json` under the fixed id `hub` (`hub` is a reserved subdomain label, so no instance can take it). The console reads it through its own endpoint, not as an instance. This is the bucket that answers whether the crawl entry (`/<locale>/instances/`, `/knot-help`) is being picked up at all.
 - Raw logs rotate by the default `/etc/logrotate.d/nginx`, **7 days**; `var/traffic/{id}.json` keeps the latest **30 days**. Aggregation reads not only the current file but also the latest three days of rotated files (`.1`, `-YYYYMMDD`, and `.gz`), so the requests crossing midnight do not fall between two aggregations.
 - The aggregated output has no IP and no full referer: IP is used only for same-day dedup, referer keeps only the hostname.
+- Search crawlers and search referrals are split out of `botShare`: whole-UA matches for Googlebot, Bingbot, Applebot, Baiduspider, and YandexBot give `crawlers`, the paths they fetch give `crawlPaths`, and the status codes they get give `crawlStatus`; referer hostnames matching a search engine's own name give `searchEngines` (`google`, `bing`, `baidu`, `duckduckgo`, `yandex`, `sogou`), so `mail.google.com` does not count. Every other bot only counts toward `botShare`. UA can be spoofed, so these are observations of a self-declared identity with no reverse-DNS check; query terms never enter the log, so they are not available here.
 - `bytes` is the compressed size sent to the client. A 304 has a 0 body, so read it together with `requests` and `cache`, not bytes alone.
 - A request served directly by the entry has an empty `$upstream_response_time`; only ones that went through the tunnel have a value, kept separate.
 - For whole-site reverse-proxied subdomains, the entry applies `proxy_cache` to `/assets/`: one zone per subdomain, 30 days, `use_stale` to ride out tunnel jitter. Filenames carry content hashes, so from the second visit the entry disk serves them directly, and the log's `cache` column is the hit state; statically served subdomains have this column always empty.
@@ -1005,7 +1034,7 @@ node ops/traffic.mjs --log ./fixtures/access.log --out ./var/traffic
 
 In production `xknot-traffic.timer` runs hourly; a missing log is quietly skipped, no empty result written. The service user must be able to read `/var/log/nginx/knot-access.log`; when the log is `0640 root:adm`, add the user to the `adm` group.
 
-Traffic only enters the console (the instance row's "yesterday N · X" and the expanded "entry traffic"), not `dist/data/hub.json`, not the member entry. Publishing a site's traffic outward needs the site owner's consent, not done for now.
+Traffic only enters the console (the instance row's "yesterday N · X", the expanded "entry traffic", and the portal's own panel on the overview), not `dist/data/hub.json`, not the member entry. The expanded panel reads the traffic endpoint live: a 14-day request chart, that day's details (requests, bytes, daily unique visitors, bot share, search crawlers with their failure count, latency, upstream, status, cache), and the top paths, referer hosts, paths fetched by search crawlers, and search referrals. Crawlers and referrals measure "was it fetched, how many visits came from search"; impressions and query terms only exist in the search engines' own webmaster consoles. Publishing a site's traffic outward needs the site owner's consent, not done for now.
 
 ### 11.4 Public snapshots on the entry disk
 

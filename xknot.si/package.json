@@ -27,6 +27,7 @@
     "build:preview": "./ops/build-hub.sh --preview",
     "republish": "node ops/republish.mjs",
     "verify": "node ops/verify-hub-data.mjs",
+    "seo:check": "node ops/seo-check.mjs",
     "test": "node --test ops/*.test.mjs server/*.test.mjs web/src/lib/*.test.mjs",
     "test:e2e": "node --test --test-concurrency=1 e2e/*.e2e.test.mjs",
     "test:ui": "npm --prefix e2e test",

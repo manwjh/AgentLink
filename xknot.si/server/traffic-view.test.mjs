@@ -14,6 +14,10 @@ const day = {
   upstream: { requests: 5088, p95: 953, max: 120004 },
   uniqueApprox: 148,
   botShare: 0.1,
+  crawlers: { googlebot: 12, bingbot: 0 },
+  crawlStatus: { "2xx": 11, "4xx": 1 },
+  crawlPaths: [{ path: "/en/instances/", requests: 12 }],
+  searchEngines: { google: 9, bing: 3, baidu: 0 },
   topPaths: [{ path: "/api/web/notifications", requests: 2488 }],
   topReferers: [{ host: "wang.xknot.si", requests: 9696 }],
   // 聚合产物里以后可能多出内部字段，控制台不该跟着漏出去。
@@ -31,6 +35,15 @@ test("normalizeDay 只挑可展示的字段，内部字段不外泄", () => {
   assert.equal(out.upstream.requests, 5088);
   assert.equal(out.uniqueApprox, 148);
   assert.equal(out.botShare, 0.1);
+  // 爬虫保留全部名单键（0 也留着），搜索引荐只留非零并且按次数排。
+  assert.equal(out.crawlers.googlebot, 12);
+  assert.equal(out.crawlers.baiduspider, 0);
+  assert.deepEqual(out.crawlStatus, { "2xx": 11, "3xx": 0, "4xx": 1, "5xx": 0 });
+  assert.deepEqual(out.crawlPaths, [{ key: "/en/instances/", requests: 12 }]);
+  assert.deepEqual(out.searchEngines, [
+    { key: "google", requests: 9 },
+    { key: "bing", requests: 3 },
+  ]);
   assert.deepEqual(out.topPaths, [{ key: "/api/web/notifications", requests: 2488 }]);
   assert.deepEqual(out.topReferers, [{ key: "wang.xknot.si", requests: 9696 }]);
   assert.equal("internal" in out, false);
@@ -47,6 +60,12 @@ test("normalizeDay 把坏日期整条丢掉，坏数值按 0 处理而不是 NaN
   assert.equal(out.bytes, 0);
   assert.equal(out.botShare, 0);
   assert.equal(out.latency.p50, null, "没有样本时不写 0 ms");
+
+  const junk = normalizeDay({ date: "2026-10-26", crawlers: [], crawlPaths: "bad", crawlStatus: 3, searchEngines: "bad" });
+  assert.equal(junk.crawlers.googlebot, 0);
+  assert.deepEqual(junk.crawlPaths, []);
+  assert.deepEqual(junk.searchEngines, []);
+  assert.deepEqual(junk.crawlStatus, { "2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0 });
 });
 
 test("summarizeTraffic 按日期倒序，只留最近 MAX_DAYS 天，并给出合计", () => {

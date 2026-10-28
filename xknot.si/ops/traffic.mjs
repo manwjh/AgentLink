@@ -8,6 +8,11 @@
 //
 // 产出 var/traffic/{id}.json：按天聚合，保留最近 N 天（默认 30）。只读这一份，
 // 不存原始日志、不存 IP、不存完整 referer；IP 只用于当天去重，落盘前已经消失。
+// 另外按 UA 把搜索引擎爬虫单列，按 referer 主机名把搜索引荐归到引擎层：
+// 「有没有被抓、从搜索进来几次」不依赖埋点和第三方。
+//
+// 门户自己也落一份 var/traffic/hub.json：xknot.si 不在实例清单里，但
+// /<locale>/instances/ 这些给爬虫看的页面在它上面，索引情况要靠这一份。
 //
 // 用法：
 //   node ops/traffic.mjs
@@ -25,6 +30,9 @@ import { invokedDirectly } from "./lib/main-module.mjs";
 
 export const DEFAULT_DAYS = 30;
 export const DEFAULT_LOG = "/var/log/nginx/knot-access.log";
+// 门户不在 instances.json 里，但它的入口流量同样要落盘：用固定 id，文件名 hub.json。
+// 同名标签已在 ops/subdomain.mjs 里保留，实例不会占用它。
+export const HUB_TRAFFIC_ID = "hub";
 
 // 一天的延迟样本上限。超过就不再收：p95 用不着全量，内存要有个硬边界。
 const MAX_SAMPLES = 20_000;
@@ -37,6 +45,52 @@ const TOP_PATHS = 10;
 // 只用来把爬虫从「访客」里分出去，不追求精确。空 UA 也算。
 const BOT_RE =
   /(bot|crawler|spider|slurp|curl|wget|python-requests|python-urllib|go-http-client|java\/|headless|phantom|monitor|uptime|pingdom|facebookexternalhit|semrush|ahrefs|mj12)/i;
+
+// 搜索引擎爬虫从「爬虫」里单独拆出来，用来回答「有没有被抓、抓了哪些页」。
+// 按名字逐个匹配：Googlebot 的 UA 里也带 bot，泛规则分不出是谁。
+// 清单是固定的，新增一个就多一列，控制台的字段白名单跟着改。
+const SEARCH_BOTS = [
+  // 只算自然搜索的抓取：AdsBot、FeedFetcher 这些是广告和订阅，不算「索引」。
+  ["googlebot", /googlebot|google-inspectiontool|googleother|storebot-google/i],
+  ["bingbot", /bingbot|bingpreview/i],
+  ["applebot", /applebot/i],
+  ["baiduspider", /baiduspider/i],
+  ["yandexbot", /yandexbot|yandeximages/i],
+];
+
+export const CRAWLER_KEYS = SEARCH_BOTS.map(([key]) => key);
+
+// 搜索引荐只认搜索引擎自己的域名。referer 到这里已经只剩主机名，查询词从来不入日志。
+// 主机名按整串匹配：mail.google.com、drive.google.com 不是搜索引荐，不沾边。
+const SEARCH_ENGINES = [
+  ["google", /^(www\.)?google\.[a-z]{2,3}(\.[a-z]{2})?$/],
+  ["bing", /^(www\.|cn\.)?bing\.com$/],
+  ["baidu", /^(www\.)?baidu\.com$/],
+  ["duckduckgo", /^(www\.|html\.)?duckduckgo\.com$/],
+  ["yandex", /^(www\.)?yandex\.[a-z.]{2,6}$/],
+  ["sogou", /^(www\.)?sogou\.com$/],
+];
+
+export const SEARCH_ENGINE_KEYS = SEARCH_ENGINES.map(([key]) => key);
+
+/** UA → 搜索引擎爬虫标识；不是这几个返回空串（其余仍计入 botShare）。 */
+export function searchBotOf(ua) {
+  const text = String(ua ?? "");
+  for (const [key, pattern] of SEARCH_BOTS) {
+    if (pattern.test(text)) return key;
+  }
+  return "";
+}
+
+/** referer 主机名 → 搜索引擎标识；不是搜索引擎返回空串。 */
+export function searchEngineOf(host) {
+  const text = String(host ?? "").trim().toLowerCase();
+  if (!text) return "";
+  for (const [key, pattern] of SEARCH_ENGINES) {
+    if (pattern.test(text)) return key;
+  }
+  return "";
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -154,6 +208,10 @@ function bucketOf(agg, id, date) {
       upstreamTimes: [],
       unique: new Set(),
       bots: 0,
+      crawlers: new Map(),
+      crawlPaths: new Map(),
+      crawlStatus: { "1xx": 0, "2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0, other: 0 },
+      searchEngines: new Map(),
       paths: new Map(),
       referers: new Map(),
     };
@@ -197,6 +255,18 @@ export function accumulate(agg, row, hostToId) {
   }
 
   if (!row.ua || BOT_RE.test(row.ua)) bucket.bots += 1;
+
+  // 搜索引擎爬虫：抓了几次、抓了哪些页、抓出了什么状态码。
+  const crawler = searchBotOf(row.ua);
+  if (crawler) {
+    bump(bucket.crawlers, crawler);
+    if (row.uri) bump(bucket.crawlPaths, row.uri);
+    bucket.crawlStatus[statusBucket(row.status)] += 1;
+  }
+
+  // 搜索引荐：从哪个搜索引擎点进来的，只到引擎这一层。
+  const engine = searchEngineOf(row.ref);
+  if (engine) bump(bucket.searchEngines, engine);
 
   if (bucket.unique.size < MAX_UNIQUE && row.ip) bucket.unique.add(fingerprint(row));
   return bucket;
@@ -244,6 +314,13 @@ export function finalizeBucket(bucket) {
     },
     uniqueApprox: bucket.unique.size,
     botShare: bucket.requests ? round(bucket.bots / bucket.requests) : 0,
+    // 搜索爬虫按名单固定出列，没出现的是 0，不省略键：控制台按同一组键渲染。
+    crawlers: Object.fromEntries(CRAWLER_KEYS.map((key) => [key, bucket.crawlers.get(key) || 0])),
+    crawlStatus: { ...bucket.crawlStatus },
+    crawlPaths: topEntries(bucket.crawlPaths, TOP_PATHS).map((entry) => ({ path: entry.key, requests: entry.count })),
+    searchEngines: Object.fromEntries(
+      SEARCH_ENGINE_KEYS.map((key) => [key, bucket.searchEngines.get(key) || 0]),
+    ),
     topPaths: topEntries(bucket.paths, TOP_PATHS).map((entry) => ({ path: entry.key, requests: entry.count })),
     topReferers: topEntries(bucket.referers, TOP_PATHS).map((entry) => ({ host: entry.key, requests: entry.count })),
   };
@@ -344,6 +421,15 @@ export function hostMapOf(manifest) {
   return map;
 }
 
+// 门户的主机名来自 federation.json 的 hub 字段，不在实例清单里。
+// 读不到就返回空串：少这一份流量，不影响各实例的聚合。
+export function hubHostOf(federation) {
+  const raw = String(federation?.hub ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  const host = raw.includes("://") ? hostOfUrl(raw) : raw.replace(/\/+$/, "");
+  return /^[a-z0-9][a-z0-9.-]*$/.test(host) ? host : "";
+}
+
 export async function run(options = {}) {
   const dataDir = process.env.XKNOT_DATA_DIR
     ? path.resolve(process.env.XKNOT_DATA_DIR)
@@ -354,6 +440,9 @@ export async function run(options = {}) {
     instancesPath = process.env.XKNOT_INSTANCES_FILE
       ? path.resolve(process.env.XKNOT_INSTANCES_FILE)
       : path.join(ROOT, "instances.json"),
+    federationPath = process.env.XKNOT_FEDERATION_FILE
+      ? path.resolve(process.env.XKNOT_FEDERATION_FILE)
+      : path.join(ROOT, "federation.json"),
     days = DEFAULT_DAYS,
     now = () => new Date(),
     log = () => {},
@@ -373,6 +462,13 @@ export async function run(options = {}) {
   }
 
   const hostToId = hostMapOf(manifest);
+  // 门户自己也算一个桶：它的页面不在实例清单里，但爬虫抓的是它。
+  // 主机名已被某个实例占用、或清单里已经有 id "hub" 时让位，不覆盖实例。
+  const hubHost = hubHostOf(await readJson(federationPath, null));
+  const ids = new Set(hostToId.values());
+  if (hubHost && !hostToId.has(hubHost) && !ids.has(HUB_TRAFFIC_ID)) {
+    hostToId.set(hubHost, HUB_TRAFFIC_ID);
+  }
   const agg = emptyAggregate();
   const files = await logFiles(logPath, { now: now() });
   for (const file of files) {
@@ -401,7 +497,7 @@ export async function run(options = {}) {
   if (unknown.length) {
     log(`清单外的 host 已忽略：${unknown.map(([host, count]) => `${host}(${count})`).join(", ")}`);
   }
-  log(`扫描 ${files.length} 份日志 ${agg.lines} 行，坏行 ${agg.badLines}，写入 ${written.length} 个实例`);
+  log(`扫描 ${files.length} 份日志 ${agg.lines} 行，坏行 ${agg.badLines}，写入 ${written.length} 份`);
   return {
     skipped: null,
     logPath,
@@ -421,6 +517,7 @@ function parseArgs(argv) {
     if (name === "--log") args.logPath = argv[++i];
     else if (name === "--out") args.outDir = path.resolve(argv[++i]);
     else if (name === "--instances") args.instancesPath = path.resolve(argv[++i]);
+    else if (name === "--federation") args.federationPath = path.resolve(argv[++i]);
     else if (name === "--days") args.days = Number(argv[++i]);
   }
   return args;
@@ -439,6 +536,7 @@ if (isMain) {
       await refreshStatus({
         dataDir: result.dataDir,
         ...(args.instancesPath ? { instancesPath: args.instancesPath } : {}),
+        ...(args.federationPath ? { federationPath: args.federationPath } : {}),
       });
     })
     .catch((error) => {

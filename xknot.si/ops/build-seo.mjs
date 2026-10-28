@@ -32,10 +32,92 @@ export const DEFAULT_ORIGIN = "https://xknot.si";
 const MARK_START = "<!-- knot-directory -->";
 const MARK_END = "<!-- /knot-directory -->";
 
+const VERIFY_START = "<!-- knot-verify -->";
+const VERIFY_END = "<!-- /knot-verify -->";
+
+// 站长后台的验证方式里，meta 标签是唯一一种只要改站点就能完成的：
+// 不用加 DNS 记录，也不用在根目录放命名奇怪的 HTML 文件。
+// 值由站点主理人从各自后台取得，存在未受版本控制的文件里，构建时注入。
+export const VERIFY_ENGINES = [
+  ["google", "google-site-verification"],
+  ["bing", "msvalidate.01"],
+  ["baidu", "baidu-site-verification"],
+  ["yandex", "yandex-verification"],
+];
+
+// 令牌按后台实际给出的字符集收：只允许这些字符，页面里就不会被拼进标签闭合。
+// 长度给得宽一点，各家格式不一。
+const VERIFY_TOKEN = /^[A-Za-z0-9._\-+/=]{8,200}$/;
+
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
 export function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ESCAPES[char]);
+}
+
+/**
+ * 验证令牌表 → 干净的同一张表。
+ *
+ * 只认登记过的引擎：键写错时宁可构建失败，也不要静默产出一份「看起来注入过、
+ * 实际没有」的页面。空值与缺项一样，都当成没配。
+ */
+export function normalizeVerify(raw) {
+  if (raw == null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new Error("verify 必须是对象：{ google, bing, baidu, yandex }");
+  const known = new Map(VERIFY_ENGINES);
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!known.has(key)) {
+      throw new Error(`verify 里有未登记的引擎：${key}（可用：${[...known.keys()].join("、")}）`);
+    }
+    const token = String(value ?? "").trim();
+    if (!token) continue;
+    if (!VERIFY_TOKEN.test(token)) throw new Error(`verify.${key} 的令牌不合规：只接受字母数字与 ._+/=-，长度 8–200`);
+    out[key] = token;
+  }
+  return out;
+}
+
+/** 验证用的 meta 标签。空表返回空串，页面里不留空壳。 */
+export function renderVerification(verify = {}) {
+  const clean = normalizeVerify(verify);
+  const lines = VERIFY_ENGINES.filter(([key]) => clean[key]).map(
+    ([key, name]) => `    <meta name="${name}" content="${escapeHtml(clean[key])}" />`,
+  );
+  if (!lines.length) return "";
+  return [VERIFY_START, ...lines, VERIFY_END].join("\n");
+}
+
+/** 把 meta 写进页面 <head>；重复生成时替换旧块，不叠加。 */
+export function injectVerification(html, verify = {}) {
+  const source = String(html ?? "");
+  const block = renderVerification(verify);
+  const start = VERIFY_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const end = VERIFY_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`${start}[\\s\\S]*?${end}\\n?`);
+  if (!block) return source.replace(pattern, "");
+  if (pattern.test(source)) return source.replace(pattern, `${block}\n`);
+  // 没有旧的块就插在 </head> 前：meta 放哪儿都不影响，留在头部便于阅读。
+  if (!/<\/head>/i.test(source)) throw new Error("页面里找不到 </head>，无法写入验证 meta");
+  return source.replace(/<\/head>/i, `${block}\n  </head>`);
+}
+
+/** 读验证令牌文件。文件不在就是没配，不报错：只有需要验证的站点才有这一份。 */
+export function readVerifyFile(file) {
+  if (!file) return {};
+  let text;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return {};
+  }
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`读不懂验证令牌文件 ${file}：${error.message}`);
+  }
+  return normalizeVerify(raw);
 }
 
 /** 按字符截断，避免把 emoji 或中文切一半。 */
@@ -132,12 +214,19 @@ function alternates(origin, suffix) {
 /**
  * 一份无脚本的实例目录页。样式内联：这个页面不引主包，也不依赖任何外部资源。
  */
-export function renderDirectoryPage({ locale, catalog = {}, instances = [], origin = DEFAULT_ORIGIN } = {}) {
+export function renderDirectoryPage({
+  locale,
+  catalog = {},
+  instances = [],
+  origin = DEFAULT_ORIGIN,
+  verify = {},
+} = {}) {
   if (!LOCALES.includes(locale)) throw new Error(`未登记的语种：${locale}`);
   const base = normalizeOrigin(origin);
   const rows = Array.isArray(instances) ? instances : [];
   const copy = copyFor(catalog);
   const canonical = `${base}/${locale}/instances/`;
+  const verification = renderVerification(verify);
 
   const structured = JSON.stringify({
     "@context": "https://schema.org",
@@ -196,7 +285,7 @@ ${alternates(base, "instances/")}
     <meta property="og:url" content="${escapeHtml(canonical)}" />
     <meta name="twitter:card" content="summary" />
     <meta name="theme-color" content="#F3F6FB" />
-    <script type="application/ld+json">${structured}</script>
+${verification ? `${verification}\n` : ""}    <script type="application/ld+json">${structured}</script>
     <style>
       * { box-sizing: border-box; }
       body {
@@ -344,10 +433,12 @@ function readCatalog(locale) {
 /**
  * 写全部产物。catalogs 只给测试用；正常构建按 LOCALES 读 web/src/locales/。
  */
-export function writeSeo({ distDir, origin = DEFAULT_ORIGIN, catalogs = null } = {}) {
+export function writeSeo({ distDir, origin = DEFAULT_ORIGIN, catalogs = null, verify = {} } = {}) {
   if (!distDir) throw new Error("writeSeo: distDir 是必填项");
   const dist = path.resolve(distDir);
   const base = normalizeOrigin(origin);
+  // 令牌先归一一次：键写错或值不合规时，一条产物都还没写就失败。
+  const tokens = normalizeVerify(verify);
   const dataFile = path.join(dist, "data", "hub.json");
   let data;
   try {
@@ -366,19 +457,26 @@ export function writeSeo({ distDir, origin = DEFAULT_ORIGIN, catalogs = null } =
     fs.mkdirSync(outDir, { recursive: true });
     fs.writeFileSync(
       path.join(outDir, "index.html"),
-      renderDirectoryPage({ locale, catalog, instances, origin: base }),
+      renderDirectoryPage({ locale, catalog, instances, origin: base, verify: tokens }),
     );
 
     const home = path.join(dist, locale, "index.html");
     if (!fs.existsSync(home)) throw new Error(`读不到 ${home}：先跑 vite build`);
     const html = fs.readFileSync(home, "utf8");
-    fs.writeFileSync(
-      home,
-      injectDirectoryFallback(html, renderDirectoryFallback({ locale, catalog, instances })),
-    );
+    // 顺序无关：两处注入各用一对标记，互不覆盖。
+    const withFallback = injectDirectoryFallback(html, renderDirectoryFallback({ locale, catalog, instances }));
+    fs.writeFileSync(home, injectVerification(withFallback, tokens));
   }
 
-  return { instances: instances.length, locales: LOCALES.length };
+  // 根路径是跳转页（meta refresh 到 /en/），也是 Search Console 验证网址前缀时
+  // 实际抓取的那一页。它没有目录摘要可补，但验证 meta 必须在这里也有一份：
+  // 只认 meta refresh 的抓取器不会替我们跟到 /en/ 再找标签。
+  const rootHome = path.join(dist, "index.html");
+  if (fs.existsSync(rootHome)) {
+    fs.writeFileSync(rootHome, injectVerification(fs.readFileSync(rootHome, "utf8"), tokens));
+  }
+
+  return { instances: instances.length, locales: LOCALES.length, verified: Object.keys(tokens) };
 }
 
 function argValue(argv, name, fallback = "") {
@@ -389,9 +487,17 @@ function argValue(argv, name, fallback = "") {
 function main(argv) {
   const dist = argValue(argv, "--dist", path.join(ROOT, "web", "dist"));
   const origin = argValue(argv, "--origin", process.env.XKNOT_HUB_ORIGIN || DEFAULT_ORIGIN);
-  const result = writeSeo({ distDir: dist, origin });
+  // 验证令牌只留在本机：默认从 var/ 读，文件不在就是没配。
+  const verifyFile = argValue(
+    argv,
+    "--verify",
+    process.env.XKNOT_SEARCH_VERIFY || path.join(ROOT, "var", "search-verify.json"),
+  );
+  const verify = readVerifyFile(verifyFile);
+  const result = writeSeo({ distDir: dist, origin, verify });
+  const verified = result.verified.length ? `；验证 meta ${result.verified.join("、")}` : "";
   console.log(
-    `==> 抓取入口：robots.txt、sitemap.xml；实例目录 ${result.instances} 条 × ${result.locales} 个语种`,
+    `==> 抓取入口：robots.txt、sitemap.xml；实例目录 ${result.instances} 条 × ${result.locales} 个语种${verified}`,
   );
 }
 

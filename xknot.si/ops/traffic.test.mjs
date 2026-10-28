@@ -104,6 +104,83 @@ test("finalizeBucket: 延迟取 p50/p95/max，爬虫占比与去重是近似值"
   assert.deepEqual(day.topPaths, [{ path: "/", requests: 10 }]);
 });
 
+test("爬虫与搜索引荐：按名单拆开，名单外的爬虫仍只计 botShare", () => {
+  const agg = emptyAggregate();
+  const hostToId = hostMapOf({ instances: [{ id: "wang", url: "https://wang.xknot.si" }] });
+  const rows = [
+    { ua: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)", uri: "/en/instances/", status: 200 },
+    { ua: "Mozilla/5.0 (compatible; Applebot/0.1; +http://www.apple.com/go/applebot)", uri: "/en/", status: 200 },
+    { ua: "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)", uri: "/zh-CN/", status: 404 },
+    { ua: "curl/8.4.0", uri: "/robots.txt", status: 200 },
+    { ua: "Mozilla/5.0", uri: "/", status: 200, ref: "https://www.google.com/" },
+    { ua: "Mozilla/5.0", uri: "/", status: 200, ref: "https://www.google.co.jp/" },
+    { ua: "Mozilla/5.0", uri: "/", status: 200, ref: "https://cn.bing.com/" },
+    { ua: "Mozilla/5.0", uri: "/", status: 200, ref: "https://www.baidu.com/s?wd=xknot" },
+    { ua: "Mozilla/5.0", uri: "/", status: 200, ref: "https://mail.google.com/" },
+    { ua: "Mozilla/5.0", uri: "/", status: 200, ref: "https://wang.xknot.si/" },
+  ];
+  for (const row of rows) accumulate(agg, parseLine(line(row)), hostToId);
+
+  const [day] = finalizeAggregate(agg).get("wang");
+  assert.deepEqual(day.crawlers, { googlebot: 1, bingbot: 1, applebot: 1, baiduspider: 0, yandexbot: 0 });
+  assert.deepEqual(day.crawlStatus, { "1xx": 0, "2xx": 2, "3xx": 0, "4xx": 1, "5xx": 0, other: 0 });
+  assert.deepEqual(
+    day.crawlPaths.map((entry) => entry.path).sort(),
+    ["/en/", "/en/instances/", "/zh-CN/"]
+  );
+  // curl 也是爬虫，但不属于搜索爬虫：只进 botShare，不进 crawlers。
+  assert.equal(day.botShare, 0.4);
+  assert.deepEqual(day.searchEngines, { google: 2, bing: 1, baidu: 1, duckduckgo: 0, yandex: 0, sogou: 0 });
+});
+
+test("run: 门户主机按 federation 的 hub 写进 hub.json，与实例分开", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "knot-traffic-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  const instancesPath = path.join(dir, "instances.json");
+  await writeFile(instancesPath, JSON.stringify({ instances: [{ id: "wang", url: "https://wang.xknot.si" }] }));
+  const federationPath = path.join(dir, "federation.json");
+  await writeFile(federationPath, JSON.stringify({ hub: "xknot.si", members: [] }));
+
+  const logPath = path.join(dir, "knot-access.log");
+  await writeFile(
+    logPath,
+    [
+      // 门户的静态目录页被 Googlebot 抓了一次，随后一个真人从 Google 点进来。
+      line({
+        host: "xknot.si",
+        uri: "/en/instances/",
+        ua: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+      }),
+      line({ host: "xknot.si", uri: "/", ref: "https://www.google.com/" }),
+      line({ host: "wang.xknot.si", uri: "/" }),
+    ].join("\n") + "\n"
+  );
+
+  const outDir = path.join(dir, "traffic");
+  const result = await run({
+    logPath,
+    outDir,
+    instancesPath,
+    federationPath,
+    now: () => new Date("2026-10-21T12:00:00Z"),
+  });
+
+  assert.deepEqual(result.unknownHosts, {}, "门户主机已经被认领，不再算清单外");
+  const hub = JSON.parse(await readFile(path.join(outDir, "hub.json"), "utf8"));
+  assert.equal(hub.id, "hub");
+  assert.equal(hub.host, "xknot.si");
+  const [day] = hub.days;
+  assert.equal(day.requests, 2);
+  assert.equal(day.crawlers.googlebot, 1);
+  assert.deepEqual(day.crawlPaths, [{ path: "/en/instances/", requests: 1 }]);
+  assert.equal(day.searchEngines.google, 1);
+
+  const wang = JSON.parse(await readFile(path.join(outDir, "wang.json"), "utf8"));
+  assert.equal(wang.id, "wang");
+  assert.equal(wang.days[0].requests, 1, "门户的请求不并进实例");
+});
+
 test("mergeTraffic: 本次日志覆盖同一天，日志里没有的旧日期保留，只留最近 N 天", () => {
   const previous = {
     days: [

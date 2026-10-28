@@ -21,11 +21,29 @@ test("中枢门户的 nginx 打开 gzip，且只压文本类", () => {
   assert.doesNotMatch(conf, /gzip_types[^;]*image\/(jpeg|png)/);
 });
 
+// 门户自己的流量必须和实例子域写进同一份按 $host 分桶的 JSON 日志。
+// 落到默认的 main 格式（不记 $host）就分不出来，hub.json 永远不生成，
+// 而聚合任务会「成功」退出、只是少一块数据，不会有任何报错。
+test("门户与实例子域共用按 host 分桶的访问日志", () => {
+  assert.match(conf, /^\s*access_log \/var\/log\/nginx\/knot-access\.log knot_json;$/m);
+  // 该格式由入口的 log.conf 声明，这份 conf 只是引用；注释要留住这条依赖。
+  assert.match(conf, /knot-log\.conf/);
+});
+
 test("Agent 指引有两条静态地址：HTML 给浏览器，原文给 Agent", () => {
   // 两个都是磁盘上的文件，不能回源、不能落到 SPA 的 location /。
   assert.match(conf, /location = \/knot-help \{\s*try_files \/knot-help\.html =404;/);
   assert.match(conf, /location = \/knot-help\.md \{\s*default_type text\/markdown;/);
   // 文档会随实例策略改，别让它按一年缓存住。
   assert.doesNotMatch(conf, /location = \/knot-help[^}]*immutable/s);
+});
+
+// 根路径曾经直接 302 到 /en/，那张跳转页就永远送不出去：Search Console 验证
+// 网址前缀时抓的是根路径，标签必须从这一页自己出来，不能指望抓取器先跳一次。
+test("根路径直接送出跳转页，不是 302", () => {
+  assert.match(conf, /location = \/\s*\{\s*try_files \/index\.html =404;/);
+  assert.doesNotMatch(conf, /location = \/\s*\{\s*return 30[12] /);
+  // 换验证令牌后要立刻可见，不能按长缓存发。
+  assert.match(conf, /location = \/\s*\{[^}]*expires -1;/s);
 });
 

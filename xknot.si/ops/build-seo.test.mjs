@@ -7,13 +7,18 @@ import test from "node:test";
 import { LOCALES } from "../web/src/lib/i18n.js";
 import {
   DEFAULT_ORIGIN,
+  VERIFY_ENGINES,
   directoryInstances,
   injectDirectoryFallback,
+  injectVerification,
   normalizeOrigin,
+  normalizeVerify,
+  readVerifyFile,
   renderDirectoryFallback,
   renderDirectoryPage,
   renderRobots,
   renderSitemap,
+  renderVerification,
   writeSeo,
 } from "./build-seo.mjs";
 
@@ -166,6 +171,53 @@ test("origin 只接受 http/https 绝对地址", () => {
   assert.throws(() => normalizeOrigin("ftp://xknot.si"), /http\/https/);
 });
 
+test("验证令牌：只认登记过的引擎，值按字符集收，空值当没配", () => {
+  assert.deepEqual(normalizeVerify({ google: " abc-1234 ", bing: "" }), { google: "abc-1234" });
+  assert.deepEqual(normalizeVerify(null), {});
+  assert.throws(() => normalizeVerify(["google"]), /必须是对象/);
+  // 键写错要构建失败：静默忽略只会产出一份「以为注入过」的页面。
+  assert.throws(() => normalizeVerify({ googel: "abc12345" }), /未登记的引擎：googel/);
+  // 引号、尖括号一律拒收，令牌不会被拼进标签结构。
+  assert.throws(() => normalizeVerify({ google: 'abc"><script>' }), /令牌不合规/);
+  assert.throws(() => normalizeVerify({ google: "short" }), /令牌不合规/);
+});
+
+test("验证 meta：只出配过的引擎，重复注入不叠加，撤掉后不留空块", () => {
+  const html = "<!doctype html><html><head><title>t</title></head><body></body></html>";
+  const once = injectVerification(html, { google: "tok-12345", baidu: "code-67890" });
+  assert.match(once, /<meta name="google-site-verification" content="tok-12345" \/>/);
+  assert.match(once, /<meta name="baidu-site-verification" content="code-67890" \/>/);
+  assert.doesNotMatch(once, /msvalidate\.01/);
+  assert.equal(injectVerification(once, { google: "tok-12345", baidu: "code-67890" }), once);
+  assert.equal(once.match(/<!-- knot-verify -->/g).length, 1);
+
+  const swapped = injectVerification(once, { bing: "bing-token-1" });
+  assert.doesNotMatch(swapped, /google-site-verification/);
+  assert.match(swapped, /msvalidate\.01" content="bing-token-1"/);
+
+  assert.doesNotMatch(injectVerification(swapped, {}), /knot-verify/);
+  assert.equal(renderVerification({}), "");
+  assert.equal(VERIFY_ENGINES.length, 4);
+});
+
+test("验证令牌文件读不到就是没配，读不懂则明确报错", () => {
+  assert.deepEqual(readVerifyFile(""), {});
+  assert.deepEqual(readVerifyFile("/nonexistent/search-verify.json"), {});
+
+  const dir = mkdtempSync(path.join(tmpdir(), "xknot-verify-"));
+  try {
+    const good = path.join(dir, "good.json");
+    writeFileSync(good, JSON.stringify({ google: "tok-abc-123" }));
+    assert.deepEqual(readVerifyFile(good), { google: "tok-abc-123" });
+
+    const bad = path.join(dir, "bad.json");
+    writeFileSync(bad, "{ not json");
+    assert.throws(() => readVerifyFile(bad), /读不懂验证令牌文件/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("writeSeo 写出 robots、sitemap 与三个语种的目录页", () => {
   const dist = mkdtempSync(path.join(tmpdir(), "xknot-seo-"));
   try {
@@ -180,7 +232,7 @@ test("writeSeo 写出 robots、sitemap 与三个语种的目录页", () => {
     }
 
     const result = writeSeo({ distDir: dist, origin: "https://example.test", catalogs: CATALOGS });
-    assert.deepEqual(result, { instances: 1, locales: LOCALES.length });
+    assert.deepEqual(result, { instances: 1, locales: LOCALES.length, verified: [] });
     assert.ok(existsSync(path.join(dist, "robots.txt")));
     assert.ok(existsSync(path.join(dist, "sitemap.xml")));
 
@@ -202,6 +254,60 @@ test("writeSeo 写出 robots、sitemap 与三个语种的目录页", () => {
       readFileSync(path.join(dist, "en", "index.html"), "utf8").match(/<!-- knot-directory -->/g).length,
       1,
     );
+  } finally {
+    rmSync(dist, { recursive: true, force: true });
+  }
+});
+
+test("writeSeo 把验证 meta 写进根路径、语种入口与目录页", () => {
+  const dist = mkdtempSync(path.join(tmpdir(), "xknot-seo-verify-"));
+  try {
+    mkdirSync(path.join(dist, "data"), { recursive: true });
+    writeFileSync(path.join(dist, "data", "hub.json"), JSON.stringify(SAMPLE));
+    // 根路径是跳转页：Search Console 验证网址前缀时抓的就是它。
+    writeFileSync(
+      path.join(dist, "index.html"),
+      '<!doctype html><html><head><title>t</title><meta http-equiv="refresh" content="0; url=/en/" /></head><body></body></html>',
+    );
+    for (const locale of LOCALES) {
+      mkdirSync(path.join(dist, locale), { recursive: true });
+      writeFileSync(
+        path.join(dist, locale, "index.html"),
+        '<!doctype html><html><head><title>t</title></head><body><div id="app"></div></body></html>',
+      );
+    }
+
+    const result = writeSeo({
+      distDir: dist,
+      origin: "https://example.test",
+      catalogs: CATALOGS,
+      verify: { google: "g-token-12345", bing: "b-token-67890" },
+    });
+    assert.deepEqual(result.verified, ["google", "bing"]);
+
+    const root = readFileSync(path.join(dist, "index.html"), "utf8");
+    assert.match(root, /<meta name="google-site-verification" content="g-token-12345" \/>/);
+    assert.match(root, /<meta http-equiv="refresh" content="0; url=\/en\/" \/>/, "跳转本身要保持原样");
+
+    for (const locale of LOCALES) {
+      const home = readFileSync(path.join(dist, locale, "index.html"), "utf8");
+      assert.match(home, /<meta name="google-site-verification" content="g-token-12345" \/>/);
+      assert.match(home, /<meta name="msvalidate\.01" content="b-token-67890" \/>/);
+      // 目录摘要与验证 meta 各占一对标记，互不覆盖。
+      assert.equal(home.match(/<!-- knot-directory -->/g).length, 1);
+      assert.equal(home.match(/<!-- knot-verify -->/g).length, 1);
+      const page = readFileSync(path.join(dist, locale, "instances", "index.html"), "utf8");
+      assert.match(page, /google-site-verification/);
+    }
+
+    // 再写一次仍然只有一份；去掉令牌后整块消失。
+    writeSeo({ distDir: dist, origin: "https://example.test", catalogs: CATALOGS, verify: { google: "g-token-12345" } });
+    const home = readFileSync(path.join(dist, "en", "index.html"), "utf8");
+    assert.equal(home.match(/<!-- knot-verify -->/g).length, 1);
+    assert.doesNotMatch(home, /msvalidate\.01/);
+
+    writeSeo({ distDir: dist, origin: "https://example.test", catalogs: CATALOGS, verify: {} });
+    assert.doesNotMatch(readFileSync(path.join(dist, "en", "index.html"), "utf8"), /knot-verify/);
   } finally {
     rmSync(dist, { recursive: true, force: true });
   }

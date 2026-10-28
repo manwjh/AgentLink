@@ -33,6 +33,7 @@ export const RESERVED_LABELS = new Set([
   "files",
   "ftp",
   "help",
+  "hub",
   "imap",
   "internal",
   "login",

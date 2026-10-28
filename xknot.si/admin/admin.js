@@ -142,6 +142,8 @@ const state = {
   // 展开那一行的入口流量。按实例只留一份：关闭面板就丢掉，重新点开会重新取，
   // 免得拿几小时前的缓存冒充当前值。status: idle / loading / ready / error。
   traffic: { id: null, status: "idle", data: null, error: "" },
+  // 门户自己的入口流量。不是实例，没有可展开的行，随总览一起取一次。
+  hubTraffic: null,
   // 正在编辑的实例配置。草稿在 state 里，保存失败重绘时不丢用户输入。
   editing: null,
   manifest: null,
@@ -336,6 +338,24 @@ async function loadTraffic(id) {
 // 内联 style 属性会被整条丢弃，柱子会塌成 0 高。
 const TRAFFIC_CHART_HEIGHT = 64;
 
+// 聚合端只给标识，展示名留在控制台：改叫法不动数据。
+const CRAWLER_LABELS = {
+  googlebot: "Googlebot",
+  bingbot: "Bingbot",
+  applebot: "Applebot",
+  baiduspider: "Baiduspider",
+  yandexbot: "YandexBot",
+};
+
+const SEARCH_ENGINE_LABELS = {
+  google: "Google",
+  bing: "Bing",
+  baidu: "百度",
+  duckduckgo: "DuckDuckGo",
+  yandex: "Yandex",
+  sogou: "搜狗",
+};
+
 function renderTrafficBars(days) {
   const shown = days.slice(0, 14).reverse();
   const peak = Math.max(...shown.map((day) => day.requests), 1);
@@ -380,6 +400,31 @@ function renderTrafficBars(days) {
       })
     ),
   ]);
+}
+
+// 一份明细里的一行；实例与门户两个面板共用同一套排版。
+function trafficMetric(term, value) {
+  return el("div", { class: "traffic-row" }, [el("dt", {}, term), el("dd", {}, value)]);
+}
+
+// 搜索爬虫摘要：按次数排，并给出它们被拒的次数（4xx/5xx 才是要修的东西）。
+function crawlerSummary(latest) {
+  const rows = Object.entries(latest?.crawlers || {})
+    .filter(([, value]) => value > 0)
+    .sort((a, b) => b[1] - a[1]);
+  const status = latest?.crawlStatus || {};
+  return {
+    text: rows.length ? rows.map(([key, value]) => `${CRAWLER_LABELS[key] || key} ${value}`).join(" · ") : "—",
+    failed: (status["4xx"] || 0) + (status["5xx"] || 0),
+  };
+}
+
+// 引擎标识换成展示名。零值在服务端已经滤掉，这里不再排序。
+function searchEngineEntries(latest) {
+  return (Array.isArray(latest?.searchEngines) ? latest.searchEngines : []).map((entry) => ({
+    ...entry,
+    key: SEARCH_ENGINE_LABELS[entry.key] || entry.key,
+  }));
 }
 
 function renderTrafficList(title, entries) {
@@ -435,8 +480,6 @@ function renderTraffic(row) {
   const pct = (value) => `${Math.round((Number(value) || 0) * 100)}%`;
   const millis = (value) => (value == null ? "—" : `${value} ms`);
 
-  const metric = (term, value) => el("div", { class: "traffic-row" }, [el("dt", {}, term), el("dd", {}, value)]);
-
   const statusText = ["2xx", "3xx", "4xx", "5xx", "1xx", "other"]
     .filter((key) => key === "2xx" || latest.status[key])
     .map((key) => `${key} ${latest.status[key]}`)
@@ -445,6 +488,9 @@ function renderTraffic(row) {
   const cacheText = `命中 ${cache.hit} · 未命中 ${cache.miss} · 绕过 ${cache.bypass}${
     cache.none ? ` · 无标记 ${cache.none}` : ""
   }`;
+
+  // 搜索爬虫：抓了几次、按是哪个；4xx/5xx 单独说，那是要修的抓取错误。
+  const crawler = crawlerSummary(latest);
 
   return wrap([
     el("p", { class: "traffic-sum" }, [
@@ -459,37 +505,111 @@ function renderTraffic(row) {
     ]),
     renderTrafficBars(days),
     el("dl", { class: "traffic-grid" }, [
-      metric("当日请求", `${latest.date} · ${latest.requests} 次 · ${formatBytes(latest.bytes)}`),
-      metric(
+      trafficMetric("当日请求", `${latest.date} · ${latest.requests} 次 · ${formatBytes(latest.bytes)}`),
+      trafficMetric(
         "日访客（近似）",
         el("span", {}, [
           `${latest.uniqueApprox}`,
           el("span", { class: "cfg-missing" }, "　同日 IP+UA 去重，跨天不合并"),
         ])
       ),
-      metric(
+      trafficMetric(
         "爬虫占比",
         el("span", {}, [
           pct(latest.botShare),
           el("span", { class: "cfg-missing" }, "　按 UA 粗分，空 UA 计入"),
         ])
       ),
-      metric(
+      trafficMetric(
+        "搜索爬虫",
+        el("span", {}, [
+          crawler.text,
+          el(
+            "span",
+            { class: "cfg-missing" },
+            `　${crawler.failed ? `失败 ${crawler.failed} 次（4xx/5xx）· ` : ""}按 UA 识别，未做反向解析`
+          ),
+        ])
+      ),
+      trafficMetric(
         "响应耗时",
         `p50 ${millis(latest.latency.p50)} · p95 ${millis(latest.latency.p95)} · 最大 ${millis(latest.latency.max)}`
       ),
-      metric(
+      trafficMetric(
         "回源",
         latest.upstream.requests
           ? `${latest.upstream.requests} 次 · p95 ${millis(latest.upstream.p95)}`
           : "全部由入口直出"
       ),
-      metric("状态码", statusText),
-      metric("缓存", cacheText),
+      trafficMetric("状态码", statusText),
+      trafficMetric("缓存", cacheText),
     ]),
     el("div", { class: "traffic-lists" }, [
       renderTrafficList("访问最多的路径", latest.topPaths.slice(0, 6)),
       renderTrafficList("来源主机", latest.topReferers.slice(0, 6)),
+      renderTrafficList("爬虫抓取最多的路径", latest.crawlPaths.slice(0, 6)),
+      renderTrafficList("搜索引荐", searchEngineEntries(latest).slice(0, 6)),
+    ]),
+  ]);
+}
+
+// 门户自己的入口流量：门户不在实例清单里，没有可展开的行，随总览一起取。
+// 只放判断索引要看的几项：被抓没有、抓了哪些页、搜索进来几次。
+function renderHubTraffic() {
+  const data = state.hubTraffic;
+  const section = (children) =>
+    el("section", { class: "panel" }, [
+      el("div", { class: "panel-head", "data-panel": "hub-traffic" }, [
+        el("h2", {}, "门户入口流量"),
+        el("span", { class: "meta" }, data?.host || "门户主机"),
+      ]),
+      ...children,
+    ]);
+
+  if (!data || data.error) {
+    return section([
+      el("p", { class: "panel-note" }, "门户流量没有读到，刷新总览再看。"),
+    ]);
+  }
+
+  const days = Array.isArray(data.days) ? data.days : [];
+  if (!days.length) {
+    return section([
+      el(
+        "p",
+        { class: "panel-note" },
+        "还没有采集到：确认入口日志里能看到门户主机，等下一次流量聚合。"
+      ),
+    ]);
+  }
+
+  const latest = days[0];
+  const crawler = crawlerSummary(latest);
+  const engines = searchEngineEntries(latest);
+  const engineText = engines.length
+    ? engines.map((entry) => `${entry.key} ${entry.requests}`).join(" · ")
+    : "—";
+
+  return section([
+    el("p", { class: "panel-note" }, "只统计入口 nginx 观测到的请求 · 每小时重算一次"),
+    el("dl", { class: "traffic-grid" }, [
+      trafficMetric("当日请求", `${latest.date} · ${latest.requests} 次 · ${formatBytes(latest.bytes)}`),
+      trafficMetric(
+        "搜索爬虫",
+        el("span", {}, [
+          crawler.text,
+          el(
+            "span",
+            { class: "cfg-missing" },
+            `　${crawler.failed ? `失败 ${crawler.failed} 次（4xx/5xx） · ` : ""}按 UA 识别`
+          ),
+        ])
+      ),
+      trafficMetric("搜索引荐", engineText),
+    ]),
+    el("div", { class: "traffic-lists" }, [
+      renderTrafficList("爬虫抓取最多的路径", latest.crawlPaths.slice(0, 6)),
+      renderTrafficList("搜索引荐", engines.slice(0, 6)),
     ]),
   ]);
 }
@@ -1132,6 +1252,7 @@ function renderOverview() {
           el("p", { class: "panel-note" }, "点一行展开这个账号的配置，不会跳走。"),
           el("div", { class: "inst-list" }, instanceRows),
         ]),
+        renderHubTraffic(),
       ]),
       el("div", { class: "ov-col" }, [
         el("section", { class: "panel" }, [
@@ -1483,9 +1604,14 @@ async function loadOverview() {
   state.overviewError = "";
   if (state.view === view) render();
   try {
-    const data = await api("/api/admin/overview");
+    // 门户流量与总览并行取：其中一份失败只让那一块显示读不到，不拖垮整页。
+    const [data, hub] = await Promise.all([
+      api("/api/admin/overview"),
+      api("/api/admin/hub/traffic").catch(() => ({ error: true })),
+    ]);
     if (seq !== overviewSeq) return;
     state.overview = data;
+    state.hubTraffic = hub;
   } catch (error) {
     if (seq !== overviewSeq) return;
     if (error.status === 401) {
