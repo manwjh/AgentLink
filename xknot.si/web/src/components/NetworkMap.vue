@@ -423,7 +423,8 @@ function activate(id) {
 .map {
   width: 100%;
   min-width: 0;
-  container-type: inline-size;
+  /* 这里没有用到 cqw/cqi，也没有 @container 查询：尺寸容器只会让布局多一次
+     尺寸计算，拿掉不影响显示。 */
 }
 
 .map-head {
@@ -659,8 +660,13 @@ function activate(id) {
   height: 14px;
   transform: translateX(-50%);
   border-radius: 50%;
-  background: radial-gradient(50% 50% at 50% 50%, var(--hub-cast), transparent 70%);
-  filter: blur(4px);
+  /* 柔和靠渐变本身：同样的观感，不必每帧再算一次 blur。
+     投影跟着 cast 一起缩放，只是 transform + opacity，可以交给合成器。 */
+  background: radial-gradient(
+    52% 52% at 50% 50%,
+    var(--hub-cast) 0%,
+    transparent 88%
+  );
   animation: cast 7s ease-in-out infinite;
 }
 
@@ -1034,6 +1040,16 @@ function activate(id) {
 
   .hint {
     font-size: 0.6rem;
+  }
+
+  /* 手机上这条飞线要整段重绘：14 条一起跑，PSI 量的就是这一段。
+     默认停在起点（不画），只有当前查看的那条才飞。 */
+  .glint {
+    animation: none;
+  }
+
+  .glint.active {
+    animation: fly 2.6s linear infinite;
   }
 }
 
