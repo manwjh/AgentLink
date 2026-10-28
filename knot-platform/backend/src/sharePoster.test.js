@@ -75,6 +75,46 @@ test("markdown blocks keep their structure", () => {
   assert.equal(code.segments[0].text, "const x = 1;");
 });
 
+test("wide Latin wraps inside the column on both paths", () => {
+  // 以前 ASCII 统一按 0.56 估宽：41 个 W 在 40px 下实际约 1650px，内容区只有 936px。
+  // 现在正文和 Markdown 共用一张字宽表，两条路的切法也必须一致。
+  const plain = wrapText("W".repeat(100), 936, 40);
+  const markdown = markdownTexts("W".repeat(100)).map((item) => item.segments.map((segment) => segment.text).join(""));
+  assert.deepEqual(markdown, plain);
+  assert.ok(plain.length > 1);
+  assert.ok(plain.every((line) => line.length <= 24), `lines were ${plain.map((line) => line.length)}`);
+});
+
+test("markdown keeps punctuation off the start of a line", () => {
+  // 正文的「标点不另起一行」原来只在纯文本路径生效，Markdown 行会以逗号开头。
+  const lines = markdownTexts(`${"甲".repeat(30)}，${"乙".repeat(30)}`)
+    .map((item) => item.segments.map((segment) => segment.text).join(""));
+  assert.ok(lines.length > 1);
+  assert.ok(lines.every((line) => !line.startsWith("，")), `lines were ${lines}`);
+});
+
+test("closing punctuation stays off the start of a line", () => {
+  // ASCII 右括号和中文右引号也算收尾标点：留在上一行，不单独起一行。
+  assert.deepEqual(wrapText(`${"W".repeat(7)})`, 280, 40), ["WWWWWWW)"]);
+  const lines = markdownTexts(`${"甲".repeat(23)}”`).map((item) => item.segments.map((segment) => segment.text).join(""));
+  assert.ok(lines.every((line) => !line.startsWith("”")), `lines were ${lines}`);
+});
+
+test("a long code line wraps instead of running past the column", () => {
+  // 代码块原来一行一条，不做任何折行；一段长代码会整段画出内容区。
+  const items = markdownTexts(`\`\`\`\n${"x".repeat(200)}\n\`\`\``);
+  assert.ok(items.length > 1);
+  assert.ok(items.every((item) => item.code && item.segments[0].text.length < 200));
+});
+
+test("the truncation ellipsis is carved out of the line width", () => {
+  // 936px 只能放 23 个 40px 的字；省略号自己占一格，所以最后一行只能是 22 个字加 …。
+  const [item] = markdownTexts("甲".repeat(100), 936, 1);
+  const text = item.segments.map((segment) => segment.text).join("");
+  assert.ok(text.endsWith("…"));
+  assert.ok(text.length <= 23, `line was ${text.length} chars`);
+});
+
 test("a markdown post is drawn with formatted runs", async () => {
   const layout = await buildSharePoster({
     body: "# 标题\n\n这是 **加粗** 和 `代码`，还有 [链接](https://wang.xknot.si)。",
@@ -542,6 +582,42 @@ test("one picture lands in the same box on both paths, tall, wide, and square", 
     const box = collage.photoBoxes[0];
     assert.equal(preview.previewBox.height, box.height, `${width}x${height}`);
     assert.equal(preview.previewBox.width, box.width, `${width}x${height}`);
+  }
+});
+
+test("a preview with EXIF rotation keeps the collage's box", async () => {
+  // 文件头写的是 400×200，方向标记要求转成 200×400。拼图那条路用入库时已摆正的宽高，
+  // 退回单图那条路也要按摆正后的比例排；直接读 sharp 的 metadata 会把框按横图算。
+  const file = await sharp({ create: { width: 400, height: 200, channels: 3, background: { r: 30, g: 60, b: 200 } } })
+    .jpeg()
+    .withMetadata({ orientation: 6 })
+    .toBuffer();
+  const base = { body: "", video: false, audioName: "", fileName: "", image: true };
+  const collage = await buildSharePoster({ ...base, photos: [{ file, width: 200, height: 400 }] });
+  const preview = await buildSharePoster({ ...base, preview: file });
+  const box = collage.photoBoxes[0];
+  assert.equal(preview.previewBox.width, box.width);
+  assert.equal(preview.previewBox.height, box.height);
+  assert.equal(preview.previewBox.vertical, box.vertical);
+});
+
+test("transparent pictures show the photo backdrop on both paths", async () => {
+  // 透明 PNG 不能一边被 JPEG 压成黑色、一边透出白色：两条路都垫同一块卡片底色。
+  const file = await sharp({ create: { width: 400, height: 300, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+    .png()
+    .toBuffer();
+  const base = { body: "", video: false, audioName: "", fileName: "", image: true };
+  const cases = [
+    { ...base, photos: [{ file, width: 400, height: 300 }] },
+    { ...base, preview: file },
+  ];
+  for (const content of cases) {
+    const layout = await buildSharePoster(content);
+    const jpeg = await renderSharePoster(content);
+    const { data, info } = await sharp(jpeg).raw().toBuffer({ resolveWithObject: true });
+    const box = layout.photoBoxes?.[0] || layout.previewBox;
+    const offset = (box.y + 20) * info.width * info.channels + (box.x + 20) * info.channels;
+    assert.ok(data[offset] > 200 && data[offset + 1] > 200 && data[offset + 2] > 200, `backdrop was ${data[offset]}, ${data[offset + 1]}, ${data[offset + 2]}`);
   }
 });
 

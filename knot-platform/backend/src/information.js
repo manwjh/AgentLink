@@ -135,7 +135,7 @@ export function isAttachmentUpload(file) {
 }
 
 // 尺寸只在图片上给：卡片要按宽高算多图排版，没有这两个数就只能猜比例。
-// 记进库的是显示图（转过 EXIF、缩到 1280 以内）的宽高，比例与卡片一致。
+// 记进库的是上传原图（转过 EXIF）的宽高；卡片显示图只是按 1280 等比缩过，比例与这里一致。
 export function imageSizeOf(row) {
   const width = Number(row?.width) || 0;
   const height = Number(row?.height) || 0;

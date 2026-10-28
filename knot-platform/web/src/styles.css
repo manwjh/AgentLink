@@ -2893,14 +2893,14 @@ a.intel-person:hover {
 
 .information-photo-row {
   display: flex;
-  gap: 2px;
+  gap: var(--photo-gap);
   min-width: 0;
   /* 行高是相对容器宽的倍数，由算法给出；不写死 px，窄屏上就不会变成一条竖着的长条。 */
   aspect-ratio: var(--row-aspect, 1);
 }
 
 .information-photo-row + .information-photo-row {
-  margin-top: 2px;
+  margin-top: var(--photo-gap);
 }
 
 .information-photo-btn {

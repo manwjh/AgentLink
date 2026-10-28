@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   LAYOUT_RULES,
+  PHOTO_GAP,
   POSTER_LAYOUT_RULES,
   photoAspect,
   planPhotoBoxes,
@@ -280,7 +281,7 @@ test("boxes fill the width and stack in the planned rows", () => {
     { width: 1080, height: 1080 },
     { width: 1200, height: 800 },
   ];
-  const plan = planPhotoBoxes(photos, { width: 936, gap: 2, x: 72, y: 300 });
+  const plan = planPhotoBoxes(photos, { width: 936, x: 72, y: 300 });
   assert.equal(plan.boxes.length, 4);
   // 每行首尾贴住内容区的左右边，宽度之和加上间隔正好是 936。
   let index = 0;
@@ -289,18 +290,18 @@ test("boxes fill the width and stack in the planned rows", () => {
     assert.equal(cells[0].x, 72);
     const last = cells[cells.length - 1];
     assert.equal(last.x + last.width, 72 + 936);
-    const span = cells.reduce((sum, cell) => sum + cell.width, 0) + 2 * (cells.length - 1);
+    const span = cells.reduce((sum, cell) => sum + cell.width, 0) + PHOTO_GAP * (cells.length - 1);
     assert.equal(span, 936);
     assert.ok(cells.every((cell) => cell.height === cells[0].height));
     index += row.cells.length;
   }
-  // 行与行之间留 2px，整块高度可以按行高算出来。
+  // 行与行之间留 PHOTO_GAP，整块高度可以按行高算出来。
   const rowsHeight = plan.rows.reduce((sum, row) => sum + Math.round(row.height * 936), 0);
-  assert.equal(plan.height, rowsHeight + 2 * (plan.rows.length - 1));
+  assert.equal(plan.height, rowsHeight + PHOTO_GAP * (plan.rows.length - 1));
   // 第二行落在第一行下面，不会叠上去。
   const firstBottom = plan.boxes[0].y + plan.boxes[0].height;
   const secondRow = plan.boxes[plan.rows[0].cells.length];
-  assert.equal(secondRow.y, firstBottom + 2);
+  assert.equal(secondRow.y, firstBottom + PHOTO_GAP);
 });
 
 test("the poster budget keeps a portrait screenshot whole where the card crops it", () => {

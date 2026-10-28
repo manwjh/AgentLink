@@ -18,9 +18,10 @@ that split takes precedence over the cost function.
 - `photoAspect(photo)`: the real aspect ratio of one image; 4:3 when dimensions are missing. Not clamped.
 - `planPhotoRows(aspects, rules)`: exhaustive cut (`2^(n-1)` ways); returns each row's height, cell shares, and crop direction.
 - `planPhotoLayout(photos)`: used by the card; the row-cut result goes straight to CSS variables.
-- `planPhotoBoxes(photos, { width, gap, rules })`: used by the share poster; multiply row heights into pixel boxes and hand them to sharp for cropping and compositing.
+- `planPhotoBoxes(photos, { width, gap, rules })`: used by the share poster; multiply row heights into pixel boxes and hand them to sharp for cropping and compositing. `gap` defaults to `PHOTO_GAP`.
+- `PHOTO_GAP`: the gap between pictures, shared by the card's CSS and the poster's pixel boxes so both use one number.
 - `LAYOUT_RULES`: target row height, row height bounds, total height cap, the narrowest cell (soft target and the hard 44px floor), crop penalty. To tune layout taste, change only this.
-- `POSTER_LAYOUT_RULES`: the same rules with the poster's budget — a row up to 300% of content width, the whole collage up to 400%, and `maxCard` as a hard cap (`strictCard`) so the collage can't push the image past its height limit. The tap floor is off there (`minTapShare: 0`): a poster isn't tapped, and splitting every extreme picture into its own row would make an extreme collage many times taller than the page it has to fit. Ordinary picture sets lay out identically in both places.
+- `POSTER_LAYOUT_RULES`: the same rules with the poster's budget — a row up to 300% of content width, the whole collage up to 400%, and `maxCard` as a hard cap (`strictCard`) so the collage can't push the image past its height limit. The share poster derives its own `maxCard` from its pixel height budget and overrides this default. The tap floor is off there (`minTapShare: 0`): a poster isn't tapped, and splitting every extreme picture into its own row would make an extreme collage many times taller than the page it has to fit. Ordinary picture sets lay out identically in both places.
 - `LAYOUT_VERSION`: bumped next to the rules whenever they change. The share poster's cache key includes it, so already-rendered images are redrawn under the new arrangement instead of being served stale.
 
 The design notes are at the top of `src/index.js`: why not to measure the DOM, why "too-tall images" need no special case, and what each term of the cost function penalizes.

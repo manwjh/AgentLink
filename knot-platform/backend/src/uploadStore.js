@@ -99,8 +99,8 @@ export async function readImageMeta(file) {
     ? "image/avif"
     : IMAGE_MIME_BY_FORMAT[format];
   if (!mime || !meta.width || !meta.height) return null;
-  // 记的是卡片显示图的宽高：显示图走 sharp.rotate() 转过 EXIF，竖拍照片在这里也要转过来，
-  // 否则库里存成横的，前端按它算多图比例就正好反过来。
+  // 记的是上传原图的宽高，方向按卡片显示图摆正：显示图走 sharp.rotate() 转过 EXIF，
+  // 竖拍照片在这里也要转过来，否则库里存成横的，前端按它算多图比例就正好反过来。
   const turned = [5, 6, 7, 8].includes(Number(meta.orientation) || 0);
   return turned
     ? { mime, width: meta.height, height: meta.width }

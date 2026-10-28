@@ -27,6 +27,8 @@ const MAX_ASPECT = 8;
 const DEFAULT_ASPECT = 4 / 3;
 // 真实可见比例与 1 差到这个程度才算「裁过」，免得浮点误差把整格标成裁剪。
 const CROP_EPSILON = 0.004;
+// 多图之间的缝：卡片用 CSS gap，海报按像素拼图；两边读同一个数，宽高换算才一致。
+export const PHOTO_GAP = 2;
 // 比代价时的容差：两种切法的代价差在这个量级以内就算打平。
 const EPS = 1e-9;
 
@@ -64,8 +66,9 @@ export const LAYOUT_RULES = {
   cropPenalty: 6,
 };
 
-// 分享图是竖着看的整张长图：行高放到 3 倍内容宽，整块拼图 4 倍
-// （MAX_HEIGHT 里扣掉头尾还留得下正文）。单图天花板只认 maxRow，两处同源。
+// 分享图是竖着看的整张长图：行高放到 3 倍内容宽，整块拼图默认 4 倍。
+// 这里只是默认预算；Backend 会按自己的 MAX_HEIGHT、内容宽和固定区反推实际行数，
+// 再覆盖 maxCard（见 sharePoster.js 的 POSTER_RULES）。单图天花板只认 maxRow，两处同源。
 // 另两处不同：海报不点，minTapShare 归零（否则极端图逐张拆行会把拼图撑爆）；
 // strictCard 打开，maxCard 就是拼图的高度上限。
 export const POSTER_LAYOUT_RULES = {
@@ -238,7 +241,7 @@ export function planPhotoLayout(photos, rules = LAYOUT_RULES) {
 // 所以同一份计划既能在 CSS 里按比例排，也能在 sharp 里按坐标裁。
 // 宽度按份额取整后，最后一格吃掉舍入误差，整行正好铺满 width。
 export function planPhotoBoxes(photos, options = {}) {
-  const { width, gap = 2, rules = LAYOUT_RULES, x: originX = 0, y: originY = 0 } = options;
+  const { width, gap = PHOTO_GAP, rules = LAYOUT_RULES, x: originX = 0, y: originY = 0 } = options;
   const items = (photos || []).map((photo) => photo || {});
   const rows = planPhotoRows(items.map(photoAspect), rules);
   const boxes = [];

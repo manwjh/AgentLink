@@ -7,11 +7,13 @@ import sharp from "sharp";
 import { keyEntry, resolve } from "@knot/config";
 import { isMarkdown, toRuns } from "@knot/markdown";
 import { LAYOUT_VERSION, POSTER_LAYOUT_RULES, planPhotoBoxes } from "@knot/photo-layout";
-import { isAudioUpload, uploadName, visibleVerdict } from "./information.js";
+import { isAudioUpload, MAX_IMAGES, uploadName, visibleVerdict } from "./information.js";
 import { loadBootstrapConfig } from "./config.js";
 import { profileFilePath, readProfileSync } from "./profile.js";
 import { derivedDir, readableBlobPath } from "./storage.js";
 import { agentAvatarSlug, defaultAvatarIndex } from "./avatars.js";
+// 退回单图时要从文件本身读宽高；同一份读取顺带把 EXIF 方向摆正，和入库时的口径一致。
+import { readImageMeta } from "./uploadStore.js";
 
 // 样例值也从 schema 取，不再在这里写第二份。
 // 站点名与标语来自站点档案 sites/<站点>/profile.json。
@@ -71,10 +73,18 @@ const INNER = WIDTH - PAD * 2;
 // 长图的成本不在 sharp 的单边上限（32767px），在解码内存和出海链路：
 // 1080×6144 = 660 万像素，约 0.7MB、一秒画完；再长的帖子截到省略号，二维码指向原文。
 export const MAX_HEIGHT = 6144;
-const PHOTO_GAP = 2;
+// 图片格子的底色，也是透明图 flatten 过去的那一层：拼图和退回单图都用这一块，
+// 不能一边垫白、一边让 JPEG 把透明区压成黑色。
+const PHOTO_BACKDROP = "#F0F2F5";
+// 中间层先按较高画质编码一次，最后由整张海报统一压到 75；两处用同一个数。
+const PHOTO_LAYER_QUALITY = 90;
 // 分享图是给人看一眼就存的，不是印刷品。90 档压出来两兆多，出海链路要传几十秒；
 // 75 档加渐进式约省三分之一字节，手机上放大也看不出差别，所以画质让一步。
 export const POSTER_JPEG_QUALITY = 75;
+// 海报画法自身的版本：换宽度、页脚排布、贴图方式或画质都抬一档。
+// 排版规则的变化由 @knot/photo-layout 的 LAYOUT_VERSION 负责，两者一起进缓存键。
+const POSTER_VERSION = 7;
+
 const GAP = 32;
 const HOLD = 280;
 const BODY_SIZE = 40;
@@ -110,6 +120,21 @@ const ACTOR_LABEL = { person: "人", personal_agent: "Agent", platform: "平台"
 const HEAD_AVATAR = 88;
 const HEAD_NAME = 40;
 const HEAD_META = 28;
+const HEAD_TOP = 56;
+const HEAD_BOTTOM = 28;
+// 头像与称呼之间、称呼与下一行之间的距离。
+const HEAD_TEXT_GAP = 28;
+const HEAD_LINE_GAP = 14;
+
+// 拼图行数从海报的高度预算反推，不再和 @knot/photo-layout 各写一个 4：
+// 扣掉最高的一条头部、页脚的二维码块、至少四分之一高给正文，再留三处 GAP，
+// 剩下的高度按内容宽换算成「最多几行图」。
+const HEAD_BAND_MAX = HEAD_TOP + HEAD_AVATAR + HEAD_BOTTOM + GAP;
+const FOOT_BAND_MAX = QR_TARGET + FOOT_PLATE * 2 + FOOT_PAD * 2;
+const TEXT_BAND_MIN = Math.round(MAX_HEIGHT / 4);
+const PHOTO_ROWS_MAX = Math.max(1, Math.floor((MAX_HEIGHT - HEAD_BAND_MAX - FOOT_BAND_MAX - TEXT_BAND_MIN - GAP * 3) / INNER));
+const POSTER_RULES = { ...POSTER_LAYOUT_RULES, maxCard: PHOTO_ROWS_MAX };
+
 const META_KEY = /^[0-9a-f]{16}$/;
 const AVATAR_DIR = path.resolve(import.meta.dirname, "../../web/public/avatars");
 const AGENT_AVATAR_DIR = path.join(AVATAR_DIR, "agents");
@@ -142,37 +167,69 @@ function clean(value) {
     .trim();
 }
 
+// 排版用的字宽只留这一份：正文折行、页脚折行、省略号和价格角标都用它。
+// 以前正文按统一的 0.56 估算、页脚再用 sharp 量真实像素，同一条文案在两处会得到不同宽度；
+// ASCII 按字形宽窄分组（按海报字体栈量出来的比例取整），CJK 与全角字符记 1。
+// 宁可略宽一点：宽了只是早折一行，窄了会把字画出内容区。
+const ASCII_NARROW = "|li.,:;'!I";
+const ASCII_NARROW_2 = "j)])([`\"}{1";
+const ASCII_NARROW_3 = "-*rtfJ/\\z";
+const ASCII_MID = "ashknu<>~Fcxe_^5v?ELbgpy27doq$396#+=08PS";
+const ASCII_WIDE = "B4ZKNRHTUDGYCXVOQ";
+const ASCII_WIDER = "A&wmM%@";
+
+function asciiUnits(ch) {
+  if (ch === " ") return 0.28;
+  if (ch === "W") return 0.98;
+  if (ASCII_WIDER.includes(ch)) return 0.78;
+  if (ASCII_WIDE.includes(ch)) return 0.68;
+  if (ASCII_NARROW.includes(ch)) return 0.13;
+  if (ASCII_NARROW_2.includes(ch)) return 0.26;
+  if (ASCII_NARROW_3.includes(ch)) return 0.4;
+  if (ASCII_MID.includes(ch)) return 0.55;
+  return 0.56;
+}
+
 function charUnits(ch) {
   const code = ch.codePointAt(0) || 0;
-  if (code <= 0x02ff) return 0.56;
-  return 1;
+  return code <= 0x02ff ? asciiUnits(ch) : 1;
 }
 
-function textWidth(text, size) {
+// 600 字重比常规宽一点；只用来把行收紧，不追求像素级精确。
+const BOLD_WIDTH = 1.04;
+
+// weight 用于称呼、价格这类单行收紧；折行时 600 字重也按 BOLD_WIDTH 略放宽。
+function textWidth(text, size, weight = "") {
   let used = 0;
   for (const ch of text) used += charUnits(ch) * size;
-  return used;
+  return weight ? used * BOLD_WIDTH : used;
 }
 
-const STICKS = new Set([..."，。、！？：；,.!?;:）】》」』"]);
+const STICKS = new Set([..."，。、！？：；,.!?;:）】》」』”’)]}"]);
 
-function ellipsize(line, width, size) {
-  let value = line;
-  while (value && textWidth(`${value}…`, size) > width) value = [...value].slice(0, -1).join("");
-  return `${value}…`;
+// 按可用宽度收字后追加省略号。省略号自己也占宽度：只把 … 拼到原行尾，
+// 最后一行会多吃掉一格，右边距就和别处不一致了。
+function ellipsizeText(text, width, size, weight = "") {
+  const value = String(text).replace(/…$/, "");
+  let cut = value;
+  while (cut && textWidth(`${cut}…`, size, weight) > width) cut = [...cut].slice(0, -1).join("");
+  return `${cut}…`;
 }
 
-export function wrapText(text, width, size, maxLines = Infinity) {
-  const chars = [...clean(text)];
+// 正文和 Markdown 行共用这一个折行器：同一套字宽、同一套「标点不另起一行」规则。
+// chars 是 { ch, ...样式 } 的数组，返回值保留原对象，调用方再决定拼成字符串还是样式段。
+// sticks 只给代码块关掉：代码里的逗号、括号换行时不该被粘回上一行。
+function wrapChars(chars, width, size, maxLines = Infinity, options = {}) {
+  const sticks = options.sticks !== false;
   const lines = [];
-  let line = "";
+  let line = [];
   let used = 0;
   let cut = false;
   for (let index = 0; index < chars.length; index += 1) {
-    const ch = chars[index];
-    if (ch === "\n") {
+    const item = chars[index];
+    if (item.ch === "\n") {
       lines.push(line);
-      line = "";
+      line = [];
       used = 0;
       if (lines.length === maxLines) {
         cut = index < chars.length - 1;
@@ -180,28 +237,35 @@ export function wrapText(text, width, size, maxLines = Infinity) {
       }
       continue;
     }
-    const next = charUnits(ch) * size;
-    if (line && used + next > width) {
-      if (STICKS.has(ch)) {
-        line += ch;
+    const next = charUnits(item.ch) * size * (item.bold || options.weight ? BOLD_WIDTH : 1);
+    if (line.length && used + next > width) {
+      if (sticks && STICKS.has(item.ch)) {
+        line.push(item);
         used += next;
         continue;
       }
       lines.push(line);
-      line = "";
+      line = [];
       used = 0;
       if (lines.length === maxLines) {
         cut = true;
         break;
       }
     }
-    line += ch;
+    line.push(item);
     used += next;
   }
   if (lines.length < maxLines) lines.push(line);
-  else if (line) cut = true;
-  if (cut && lines.length) lines[lines.length - 1] = ellipsize(lines[lines.length - 1], width, size);
-  return lines.length ? lines : [""];
+  else if (line.length) cut = true;
+  return { lines, cut };
+}
+
+export function wrapText(text, width, size, maxLines = Infinity) {
+  const chars = [...clean(text)].map((ch) => ({ ch }));
+  const { lines, cut } = wrapChars(chars, width, size, maxLines);
+  const result = lines.map((line) => line.map((item) => item.ch).join(""));
+  if (cut && result.length) result[result.length - 1] = ellipsizeText(result[result.length - 1], width, size);
+  return result.length ? result : [""];
 }
 
 function compressSegments(chars) {
@@ -220,28 +284,18 @@ function compressSegments(chars) {
   return segments;
 }
 
-function wrapInline(segments, width, size) {
+function emptyInlineLine() {
+  return [{ text: "", bold: false, italic: false, code: false, link: null }];
+}
+
+function wrapInline(segments, width, size, options = {}) {
   const chars = [];
   for (const segment of segments) {
     for (const ch of segment.text) chars.push({ ch, bold: segment.bold, italic: segment.italic, code: segment.code, link: segment.link });
   }
-  const lines = [];
-  let line = [];
-  let used = 0;
-  for (let index = 0; index < chars.length; index += 1) {
-    const ch = chars[index];
-    const next = charUnits(ch.ch) * size;
-    if (line.length && used + next > width) {
-      lines.push(line);
-      line = [];
-      used = 0;
-    }
-    line.push(ch);
-    used += next;
-  }
-  if (line.length) lines.push(line);
-  if (!lines.length) return [[{ text: "", bold: false, italic: false, code: false, link: null }]];
-  return lines.map(compressSegments);
+  const { lines } = wrapChars(chars, width, size, options.maxLines ?? Infinity, options);
+  if (!lines.length) return [emptyInlineLine()];
+  return lines.map((line) => (line.length ? compressSegments(line) : emptyInlineLine()));
 }
 
 // 海报的文字行由共享解析器给出，这里只负责字号、缩进和省略号。
@@ -254,10 +308,7 @@ export function markdownTexts(body, width = INNER, maxLines = Infinity) {
   };
   const ellipsizeLast = () => {
     const last = items[items.length - 1];
-    const segments = last?.segments;
-    if (!segments || !segments.length) return;
-    const tail = segments[segments.length - 1];
-    tail.text = `${tail.text.replace(/…$/, "")}…`;
+    if (last) ellipsizeLine(last, width);
   };
 
   for (const run of toRuns(clean(body))) {
@@ -271,14 +322,13 @@ export function markdownTexts(body, width = INNER, maxLines = Infinity) {
     if (run.type === "code") {
       for (const raw of run.lines) {
         const code = raw.replace(/\t/g, "  ");
-        const item = {
-          segments: [{ text: code || " ", bold: false, italic: false, code: true, link: null }],
-          size: CODE_SIZE,
-          leading: CODE_LEADING,
-          fill: "#050505",
-          code: true,
-        };
-        if (!add(item)) break;
+        // 代码块和正文用同一个折行器，只是关掉标点粘连：一行代码再长也不该画出内容区。
+        const segments = [{ text: code || " ", bold: false, italic: false, code: true, link: null }];
+        for (const line of wrapInline(segments, width, CODE_SIZE, { sticks: false })) {
+          const item = { segments: line, size: CODE_SIZE, leading: CODE_LEADING, fill: "#050505", code: true };
+          if (!add(item)) break;
+        }
+        if (items.length >= maxLines) break;
       }
       continue;
     }
@@ -287,7 +337,7 @@ export function markdownTexts(body, width = INNER, maxLines = Infinity) {
       const level = Math.max(1, Math.min(3, run.level));
       const size = level === 1 ? H1_SIZE : level === 2 ? H2_SIZE : H3_SIZE;
       const leading = level === 1 ? H1_LEADING : level === 2 ? H2_LEADING : H3_LEADING;
-      for (const line of wrapInline(run.segments, width, size)) {
+      for (const line of wrapInline(run.segments, width, size, { weight: "600" })) {
         if (!add({ segments: line, size, leading, fill: "#050505", weight: "600" })) break;
       }
       continue;
@@ -437,49 +487,18 @@ export function shareHead(row) {
 export function shareMetaKey(card) {
   const head = card?.head || {};
   const site = shareSite();
-  // 键里有三段会变的东西：这张海报的画法（画质、宽度、页脚排布）、排版包自己的版本
+  // 键里有三段会变的东西：这张海报的画法（画质、宽度、页脚排布、贴图方式）、排版包自己的版本
   // （改规则只抬那边的号）、以及落进图里的文字与头像。任一段变了，旧图就不再命中。
-  const payload = [`6.${LAYOUT_VERSION}`, site.page, site.name, site.line, head.author || "", head.posted || "", head.actor || "", head.category || "", String(head.price ?? 0), head.avatarKey || ""].join("\u0001");
+  const payload = [`${POSTER_VERSION}.${LAYOUT_VERSION}`, site.page, site.name, site.line, head.author || "", head.posted || "", head.actor || "", head.category || "", String(head.price ?? 0), head.avatarKey || ""].join("\u0001");
   return createHash("sha256").update(payload).digest("hex").slice(0, 16);
 }
 
-async function inkWidth(text, size, weight = "") {
-  const bold = weight ? ` font-weight="${weight}"` : "";
-  const svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="${size + 40}">
-  <text x="0" y="${size}" font-family="${FONT}" font-size="${size}" fill="#050505"${bold}>${xml(text)}</text>
-</svg>`;
-  const { info } = await sharp(Buffer.from(svg)).trim().png().toBuffer({ resolveWithObject: true });
-  return info.width || 0;
-}
-
-// 键里带任意文本（称呼、类别、站点名、附件名），不封顶就会随长尾文本一直长（S12-13）。
-// 一张海报量到的字串远小于这个数，留最近用到的那些就够；命中时挪到队尾，最久没用的先走。
-const WIDTH_CACHE_MAX = 2000;
-const widthCache = new Map();
-async function measureWidth(text, size, weight = "") {
-  const key = `${size}\u0000${weight}\u0000${text}`;
-  const cached = widthCache.get(key);
-  if (cached !== undefined) {
-    widthCache.delete(key);
-    widthCache.set(key, cached);
-    return cached;
-  }
-  const value = await inkWidth(text, size, weight);
-  while (widthCache.size >= WIDTH_CACHE_MAX) {
-    const oldest = widthCache.keys().next().value;
-    widthCache.delete(oldest);
-  }
-  widthCache.set(key, value);
-  return value;
-}
-
-async function priceBox(label) {
+function priceBox(label) {
   const size = 36;
   const coin = 34;
   const gap = 12;
   const padX = 22;
-  const textW = Math.ceil(await measureWidth(label, size, "600"));
+  const textW = Math.ceil(textWidth(label, size, "600"));
   return { size, coin, gap, padX, width: padX + coin + gap + textW + padX, height: 72, label };
 }
 
@@ -500,26 +519,26 @@ function drawPrice(box, x, y) {
   return `<rect x="${x}" y="${y}" width="${box.width}" height="${box.height}" rx="${box.height / 2}" fill="#F0F2F5"/><circle cx="${coinCx}" cy="${coinCy}" r="${radius}" fill="none" stroke="#0866FF" stroke-width="3"/><circle cx="${coinCx}" cy="${coinCy}" r="${(radius * 0.62).toFixed(2)}" fill="none" stroke="#0866FF" stroke-width="2.5"/><line x1="${coinCx}" y1="${(coinCy - radius * 0.42).toFixed(2)}" x2="${coinCx}" y2="${(coinCy + radius * 0.42).toFixed(2)}" stroke="#0866FF" stroke-width="2.5" stroke-linecap="round"/>${textLine(box.label, textX, baseline, box.size, "#050505", "start", "600")}`;
 }
 
-async function layoutHead(head) {
+function layoutHead(head) {
   const author = clean(head?.author) || "用户";
   const actor = ACTOR_LABEL[head?.actor] || "";
   const posted = formatPosted(head?.posted);
   const category = clean(head?.category);
   const label = priceLabel(head?.price);
-  const box = label ? await priceBox(label) : null;
-  const textX = PAD + HEAD_AVATAR + 28;
+  const box = label ? priceBox(label) : null;
+  const textX = PAD + HEAD_AVATAR + HEAD_TEXT_GAP;
   const textMax = Math.max(160, WIDTH - PAD - (box ? box.width + 24 : 0) - textX);
-  const actorWidth = actor ? await measureWidth(actor, HEAD_META) : 0;
+  const actorWidth = actor ? textWidth(actor, HEAD_META) : 0;
   const actorGap = actor ? 20 : 0;
-  const name = await fitLine(author, Math.max(80, textMax - actorWidth - actorGap), HEAD_NAME, "600");
-  const meta = await fitLine([posted, category].filter(Boolean).join(" · "), textMax, HEAD_META);
-  const textBlock = HEAD_NAME + (meta ? 14 + HEAD_META : 0);
+  const name = fitLine(author, Math.max(80, textMax - actorWidth - actorGap), HEAD_NAME, "600");
+  const meta = fitLine([posted, category].filter(Boolean).join(" · "), textMax, HEAD_META);
+  const textBlock = HEAD_NAME + (meta ? HEAD_LINE_GAP + HEAD_META : 0);
   const block = Math.max(HEAD_AVATAR, textBlock);
-  const top = 56;
+  const top = HEAD_TOP;
   const avatarY = top + (block - HEAD_AVATAR) / 2;
   const blockTop = top + (block - textBlock) / 2;
   const nameY = blockTop + HEAD_NAME;
-  const metaY = nameY + 14 + HEAD_META;
+  const metaY = nameY + HEAD_LINE_GAP + HEAD_META;
   const pillY = box ? Math.round(top + block / 2 - box.height / 2) : 0;
   const letter = [...name.replace(/…$/, "")][0] || "用";
   const avatarCy = avatarY + HEAD_AVATAR / 2;
@@ -528,23 +547,18 @@ async function layoutHead(head) {
     `<text x="${PAD + HEAD_AVATAR / 2}" y="${avatarCy}" text-anchor="middle" dominant-baseline="central" font-family="${FONT}" font-size="40" font-weight="600" fill="#050505">${xml(letter)}</text>`,
     textLine(name, textX, nameY, HEAD_NAME, "#050505", "start", "600"),
   ];
-  if (actor) parts.push(textLine(actor, textX + (await measureWidth(name, HEAD_NAME, "600")) + actorGap, nameY - 4, HEAD_META, "#65676B"));
+  if (actor) parts.push(textLine(actor, textX + textWidth(name, HEAD_NAME, "600") + actorGap, nameY - 4, HEAD_META, "#65676B"));
   if (meta) parts.push(textLine(meta, textX, metaY, HEAD_META, "#65676B"));
   if (box) parts.push(drawPrice(box, WIDTH - PAD - box.width, pillY));
-  const bottom = top + block + 28;
+  const bottom = top + block + HEAD_BOTTOM;
   parts.push(`<line x1="${PAD}" y1="${bottom}" x2="${WIDTH - PAD}" y2="${bottom}" stroke="#E4E6EB" stroke-width="2"/>`);
   return { svg: parts.join("\n  "), contentTop: bottom + GAP, avatarBox: { x: PAD, y: avatarY, size: HEAD_AVATAR } };
 }
 
-async function fitLine(text, width, size, weight = "") {
+function fitLine(text, width, size, weight = "") {
   const value = clean(text);
   if (!value) return value;
-  if ((await measureWidth(value, size, weight)) <= width) return value;
-  let trimmed = value;
-  while (trimmed && (await measureWidth(`${trimmed}…`, size, weight)) > width) {
-    trimmed = [...trimmed].slice(0, -1).join("");
-  }
-  return `${trimmed}…`;
+  return textWidth(value, size, weight) <= width ? value : ellipsizeText(value, width, size, weight);
 }
 
 // 单图预览走的是同一张排版表：把这张图当成「一组只有一张的图」，框就由求解器给。
@@ -553,11 +567,11 @@ async function fitLine(text, width, size, weight = "") {
 async function fittedPreview(preview) {
   if (!preview) return null;
   try {
-    const meta = await sharp(preview).rotate().metadata();
-    const srcW = meta.width || 0;
-    const srcH = meta.height || 0;
-    if (!srcW || !srcH) return null;
-    const plan = posterPhotos([{ file: preview, width: srcW, height: srcH }], 0);
+    // 这里不能直接读 sharp 的 metadata：它给的是旋转前的宽高，而下面贴图时会 .rotate()。
+    // 用入库时同一个读取口径，EXIF 竖拍照片的框才和拼图那条路一致。
+    const meta = await readImageMeta(preview);
+    if (!meta) return null;
+    const plan = posterPhotos([{ file: preview, width: meta.width, height: meta.height }], 0);
     const box = plan?.boxes?.[0];
     if (!box || box.height < 1) return null;
     return { x: box.x, width: box.width, height: box.height, vertical: box.vertical };
@@ -568,24 +582,60 @@ async function fittedPreview(preview) {
 
 // 一组图按卡片的拼法排进海报：切几行、每格多宽多高全由 @knot/photo-layout 给出，
 // 这里只把「内容宽的倍数」乘成像素并加上左边距。返回的是坐标表，贴图在 renderSharePoster 里做。
-export function posterPhotos(photos, top = 0, rules = POSTER_LAYOUT_RULES) {
+export function posterPhotos(photos, top = 0) {
   const usable = (photos || []).filter((photo) => photo && photo.file && photo.width > 0 && photo.height > 0);
   if (!usable.length) return null;
-  const plan = planPhotoBoxes(usable, { width: INNER, gap: PHOTO_GAP, x: PAD, y: top, rules });
+  const plan = planPhotoBoxes(usable, { width: INNER, x: PAD, y: top, rules: POSTER_RULES });
   return { ...plan, top };
 }
 
-// 高度到顶时，把最后一段有字的正文收尾成省略号。
-function ellipsizeLine(line) {
+// 行尾省略号也占宽度：先按剩余宽度收字，再把 … 放进最后一个样式段。
+// 只把 … 直接拼到原行尾，最后一行会多吃掉一格，右边距就和别处不一致了。
+function segmentWeight(segment, weight) {
+  return segment.bold || weight ? "600" : "";
+}
+
+function ellipsizeSegments(segments, width, size, weight = "") {
+  // 省略号按粗体预留，宁可少留一个字，也不让 … 越出内容区。
+  const ellipsis = textWidth("…", size, "600");
+  const budget = Math.max(0, width - ellipsis);
+  const kept = [];
+  let used = 0;
+  for (const segment of segments) {
+    const style = segmentWeight(segment, weight);
+    const text = String(segment.text || "");
+    if (!text) {
+      kept.push({ ...segment });
+      continue;
+    }
+    const full = textWidth(text, size, style);
+    if (used + full <= budget) {
+      kept.push({ ...segment });
+      used += full;
+      continue;
+    }
+    let cut = text;
+    while (cut && used + textWidth(cut, size, style) > budget) cut = [...cut].slice(0, -1).join("");
+    if (cut) kept.push({ ...segment, text: cut });
+    break;
+  }
+  const tail = kept.filter((segment) => segment.text).pop();
+  if (!tail) return [{ ...(segments[0] || {}), text: "…" }];
+  tail.text = `${tail.text.replace(/…$/, "")}…`;
+  return kept;
+}
+
+// 高度到顶时，把最后一段有字的正文收尾成省略号；width 是这一行真正可用的宽度（缩进已扣）。
+function ellipsizeLine(line, width = INNER) {
   if (line.rule) return false;
+  const room = Math.max(1, width - (line.indent || 0));
+  const size = line.size || BODY_SIZE;
   if (line.segments?.length) {
-    const tail = line.segments[line.segments.length - 1];
-    if (!tail.text) return false;
-    tail.text = `${tail.text.replace(/…$/, "")}…`;
+    line.segments = ellipsizeSegments(line.segments, room, size, line.weight);
     return true;
   }
   if (typeof line.text === "string" && line.text) {
-    line.text = `${line.text.replace(/…$/, "")}…`;
+    line.text = ellipsizeText(line.text, room, size, line.weight);
     return true;
   }
   return false;
@@ -608,13 +658,13 @@ function fitTexts(texts, room) {
   return kept;
 }
 
-async function posterPr(content, site) {
+function posterPr(content, site) {
   const qr = qrRects(shareUrl(content?.id, site));
   const qrBox = qr.size + FOOT_PLATE * 2;
   // 两栏之间留一个 GAP，文字不会贴到二维码的白底上。
   const room = Math.max(160, WIDTH - PAD * 2 - qrBox - GAP);
-  const name = await fitLine(site.name, room, FOOT_NAME, "600");
-  const host = await fitLine(site.host, room, FOOT_HOST);
+  const name = fitLine(site.name, room, FOOT_NAME, "600");
+  const host = fitLine(site.host, room, FOOT_HOST);
   const lines = wrapText(site.line, room, FOOT_LINE, 2).filter((line) => line);
   const textHeight = FOOT_NAME + lines.length * FOOT_LINE_LEADING + FOOT_HOST + FOOT_GAP * 2;
   return { qr, name, host, lines, textHeight, height: Math.max(textHeight, qrBox) + FOOT_PAD * 2 };
@@ -653,15 +703,15 @@ export async function buildSharePoster(content, site = shareSite()) {
         texts.push({ text: line, size: BODY_SIZE, leading: BODY_LEADING, fill: "#050505" });
       }
     }
-    if (audioName) texts.push({ text: await fitLine(audioName, INNER, NAME_SIZE), size: NAME_SIZE, leading: NAME_LEADING, fill: "#65676B" });
-    if (fileName) texts.push({ text: await fitLine(fileName, INNER, NAME_SIZE), size: NAME_SIZE, leading: NAME_LEADING, fill: "#65676B" });
+    if (audioName) texts.push({ text: fitLine(audioName, INNER, NAME_SIZE), size: NAME_SIZE, leading: NAME_LEADING, fill: "#65676B" });
+    if (fileName) texts.push({ text: fitLine(fileName, INNER, NAME_SIZE), size: NAME_SIZE, leading: NAME_LEADING, fill: "#65676B" });
   } else {
     const stand = audioName || fileName;
-    if (stand) texts.push({ text: await fitLine(stand, INNER, BODY_SIZE), size: BODY_SIZE, leading: BODY_LEADING, fill: "#050505" });
+    if (stand) texts.push({ text: fitLine(stand, INNER, BODY_SIZE), size: BODY_SIZE, leading: BODY_LEADING, fill: "#050505" });
   }
 
-  const pr = await posterPr(content, site);
-  const head = await layoutHead(content.head);
+  const pr = posterPr(content, site);
+  const head = layoutHead(content.head);
   const gallery = posterPhotos(content.photos, head.contentTop);
   // 有拼图就不再退回单图；没有尺寸的老记录才用预览图或「图片」占位。
   const previewBox = gallery ? null : await fittedPreview(content.preview);
@@ -673,12 +723,14 @@ export async function buildSharePoster(content, site = shareSite()) {
   if (gallery) {
     // 先铺一层底色：某张图贴失败时是一块灰，不是白洞。
     for (const box of gallery.boxes) {
-      parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="#F0F2F5"/>`);
+      parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${PHOTO_BACKDROP}"/>`);
     }
     y += gallery.height + GAP;
   }
   if (placedPreview) {
     placedPreview = { ...placedPreview, y };
+    // 退回单图时也垫同一块底色：贴图失败或图片带透明区，看到的都是卡片上的那块灰。
+    parts.push(`<rect x="${placedPreview.x}" y="${placedPreview.y}" width="${placedPreview.width}" height="${placedPreview.height}" fill="${PHOTO_BACKDROP}"/>`);
     y += placedPreview.height + GAP;
   }
   let videoY = 0;
@@ -757,12 +809,14 @@ async function roundAvatar(input, size) {
 }
 
 // 一格图：按算法给的框 cover 进去。竖着裁的保留顶部（长截图的开头有标题），横着裁的居中。
-async function photoLayer(box) {
+// 拼图和退回单图都走这一份：透明区垫成卡片底色，读不出来的图留底色而不是让整张图失败。
+async function photoLayer(file, box) {
   try {
-    return await sharp(box.photo.file)
+    return await sharp(file)
       .rotate()
       .resize(box.width, box.height, { fit: "cover", position: box.vertical ? "top" : "centre" })
-      .jpeg({ quality: 82 })
+      .flatten({ background: PHOTO_BACKDROP })
+      .jpeg({ quality: PHOTO_LAYER_QUALITY })
       .toBuffer();
   } catch {
     // 一张读不出来的图不该让整张分享图生不出来：那块留底色，其余照画。
@@ -774,18 +828,14 @@ export async function renderSharePoster(content) {
   const layout = await buildSharePoster(content);
   const composites = [];
   for (const box of layout.photoBoxes || []) {
-    const layer = await photoLayer(box);
+    const layer = await photoLayer(box.photo.file, box);
     if (layer) composites.push({ input: layer, left: box.x, top: box.y });
   }
   if (layout.previewBox && content.preview) {
     const box = layout.previewBox;
     // 框由排版表给出，裁的方向也由它给：竖着裁的保留开头，横着裁的居中。
-    const layer = await sharp(content.preview)
-      .rotate()
-      .resize(box.width, box.height, { fit: "cover", position: box.vertical ? "top" : "centre" })
-      .png()
-      .toBuffer();
-    composites.push({ input: layer, left: box.x, top: box.y });
+    const layer = await photoLayer(content.preview, box);
+    if (layer) composites.push({ input: layer, left: box.x, top: box.y });
   }
   if (layout.avatarBox && content.avatarPath) {
     try {
@@ -904,6 +954,7 @@ export async function loadShareCard(pool, intelId, uploadDir) {
   // 少一张尺寸就退回单图：按 4:3 硬猜会把拼图裁歪，不如给一张完整的原图。
   const images = [];
   for (const file of files) {
+    if (images.length >= MAX_IMAGES) break;
     if (!String(file.mime || "").startsWith("image/")) continue;
     const path = readableBlobPath(uploadDir, file.storage_name);
     if (!(await fileExists(path))) continue;

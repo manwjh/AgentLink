@@ -4,7 +4,7 @@ import PhotoLightbox from "./PhotoLightbox.vue";
 import { t } from "../i18n/index.js";
 import { photoAlt } from "../mediaLabel.js";
 // 排版算法在 @knot/photo-layout：卡片与分享图各有一套预算，但切行与裁剪的判断只有那一份。
-import { planPhotoLayout } from "@knot/photo-layout";
+import { PHOTO_GAP, planPhotoLayout } from "@knot/photo-layout";
 
 const props = defineProps({
   // [{ url, width, height }]。宽高用来算多图的切分与行高，缺了就按 4:3 猜。
@@ -46,7 +46,7 @@ function openAt(position) {
 </script>
 
 <template>
-  <div v-if="items.length" class="information-images">
+  <div v-if="items.length" class="information-images" :style="{ '--photo-gap': `${PHOTO_GAP}px` }">
     <div
       v-for="row in rows"
       :key="row.key"
