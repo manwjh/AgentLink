@@ -373,25 +373,12 @@ a {
   white-space: nowrap;
 }
 
-.badge.pending,
-.badge.verified,
-.badge.hold {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
 .badge.approved {
   background: var(--ok-soft);
   color: var(--ok);
 }
 
-.badge.rejected {
-  background: var(--bad-soft);
-  color: var(--bad);
-}
-
-.badge.withdrawn,
-.badge.expired {
+.badge.withdrawn {
   background: var(--surface-soft);
   color: var(--dim);
   text-decoration: line-through;

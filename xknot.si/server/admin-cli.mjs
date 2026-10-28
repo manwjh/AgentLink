@@ -56,7 +56,7 @@ import { fileURLToPath } from "node:url";
 import { withFileLock } from "./file-lock.mjs";
 import { loadEnvFile } from "./env-file.mjs";
 import { createMailer, mailConfigFromEnv, isTransientMailError, mailErrorCode } from "./mail.mjs";
-import { checkManifestEntry, suggestId, toManifestEntry, toRosterMember } from "./manifest.mjs";
+import { checkManifestEntry, toManifestEntry, toRosterMember } from "./manifest.mjs";
 import { validateRoster } from "../ops/validate-federation.mjs";
 import { TIERS } from "../ops/profile-schema.mjs";
 import { ALL_EVENTS, TEMPLATE_VERSION, buildMail } from "./notify.mjs";
@@ -391,7 +391,8 @@ async function main(argv) {
       return fail(`申请当前是 ${application.status}；接入件只发给已通过的申请。`);
     }
 
-    const instanceId = flag(rest, "id", application.subdomain || suggestId(application.url));
+    const instanceId = flag(rest, "id", application.subdomain);
+    if (!instanceId) return fail("这条申请没有子域标签，清单里认不出实例；先补标签再发接入件。");
     const manifest = await readManifest();
     const instance = manifest.instances.find((item) => item.id === instanceId);
     if (!instance) return fail(`清单里没有实例 "${instanceId}"。先 publish，再发接入件。`);

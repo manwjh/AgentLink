@@ -142,33 +142,3 @@ test("submitApplication：本地缺项不发出请求，中枢的拒绝原样带
   });
   assert.equal(duplicate.error, "duplicate");
 });
-
-test("submitApplication：老中枢要 mode 时补发一次，新中枢不收到这个字段", async () => {
-  const bodies = [];
-  const legacy = await submitApplication({
-    site: SITE,
-    subdomain: "nordhavn",
-    hubOrigin: "https://hub.example",
-    fetchImpl: async (_url, init) => {
-      const body = JSON.parse(init.body);
-      bodies.push(body);
-      if (!("mode" in body)) return reply(400, { error: "invalid", fields: { mode: "required" } });
-      return reply(201, { application: { id: "XK-2", caseUrl: "https://hub.example/case/k2" } });
-    },
-  });
-  assert.equal(legacy.ok, true);
-  assert.equal(legacy.application.id, "XK-2");
-  assert.equal(bodies.length, 2);
-  assert.equal("mode" in bodies[0], false);
-  assert.equal(bodies[1].mode, "subdomain");
-
-  // 其它字段不合格时不要拿 mode 去试探：一次就够。
-  const broken = await submitApplication({
-    site: SITE,
-    subdomain: "nordhavn",
-    hubOrigin: "https://hub.example",
-    fetchImpl: async () => reply(400, { error: "invalid", fields: { email: "invalid" } }),
-  });
-  assert.equal(broken.error, "invalid");
-  assert.equal(broken.fields.email, "invalid");
-});

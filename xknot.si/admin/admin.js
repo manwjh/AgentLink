@@ -9,12 +9,6 @@ const app = document.getElementById("app");
 const STATUS_LABEL = {
   approved: "已通过",
   withdrawn: "已撤回",
-  // 只读状态，不再新增。
-  pending: "待确认",
-  verified: "待审核",
-  hold: "搁置",
-  rejected: "已拒绝",
-  expired: "已过期",
 };
 
 // 总览里的实例状态。pending 是已收录、未通过 /api/health 验收；paused 是暂停或退役。
@@ -1157,9 +1151,8 @@ function renderOverview() {
       })
     : el("p", { class: "empty" }, "清单里还没有实例。");
 
-  // 队列只给状态机能产出的两个分类。`rejected` / `expired` 没有任何写入路径
-  // （见 server/store.mjs 的 TRANSITIONS），它们只可能是历史行；历史行在
-  // 「全部」里带徽章照常出现，不必为此常驻两个永远为 0 的入口。
+  // 队列只给状态机能产出的两个分类（见 server/store/applications.mjs 的 TRANSITIONS），
+  // 没有写入口的状态就不占一个永远为 0 的位置。
   const queueKeys = ["approved", "withdrawn"];
   const queue = el(
     "div",

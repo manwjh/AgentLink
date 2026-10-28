@@ -30,7 +30,6 @@ const application = {
   reviewedAt: "2026-10-02T00:00:00.000Z",
   stateVersion: 2,
   caseKey: "casekey123",
-  mode: "subdomain",
   subdomain: "nordhavn",
   url: "https://nordhavn.xknot.si",
 };
@@ -40,7 +39,6 @@ const options = {
   adminEmail: "ops@xknot.si",
   supportUrl: "https://xknot.si/en/join/",
   replyTo: "no-reply@xknot.si",
-  subdomain: "nordhavn.xknot.si",
   entryHost: "entry.xknot.si",
   account: "knot-nordhavn",
   port: "16001",
@@ -171,19 +169,6 @@ test("copy: issuance shows tunnel lines, and omits the secret itself", () => {
   assert.match(mail.text, /entry\.xknot\.si/);
   assert.match(mail.text, /16001/);
   assert.match(mail.text, /ssh-keygen -t ed25519/);
-});
-
-test("vars: the issuance mail derives the subdomain from the application itself", () => {
-  // 运营方执行 notify 时不必再手填 --subdomain；申请单里已经有标签。
-  const mail = buildMail("partner.issuance", application, { ...options, subdomain: "" });
-  assert.match(mail.text, /实例地址：https:\/\/nordhavn\.xknot\.si/);
-  assert.doesNotMatch(mail.text, /接入模式/);
-  const legacy = buildMail(
-    "partner.issuance",
-    { ...application, subdomain: null, url: "https://nordhavn.xknot.si" },
-    { ...options, subdomain: "" }
-  );
-  assert.match(legacy.text, /nordhavn\.xknot\.si/);
 });
 
 test("vars: missing links become empty, not literal braces", () => {

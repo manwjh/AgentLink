@@ -19,7 +19,6 @@ const ADMIN = "e2e-partner-admin";
 
 const APPLICATION = {
   name: "Partners E2E",
-  mode: "subdomain",
   subdomain: "partner-e2e",
   operator: "Lin",
   email: "partner@partner-e2e.example",
@@ -190,7 +189,6 @@ test("join: 案例页可以提交公钥，撤销后不再接受审核", async ()
 test("join: 通过后交接发一次性领取链接，领取页不消费、领取只能用一次", async () => {
   const application = {
     ...APPLICATION,
-    mode: "subdomain",
     subdomain: "partner-claim",
     email: "claim@partner-e2e.example",
   };

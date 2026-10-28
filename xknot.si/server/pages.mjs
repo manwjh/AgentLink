@@ -129,12 +129,6 @@ const TEXT = {
 const STATUS_LABEL = {
   approved: { "zh-CN": "已通过", "zh-TW": "已通過", en: "approved" },
   withdrawn: { "zh-CN": "已撤回", "zh-TW": "已撤回", en: "withdrawn" },
-  // 只读状态，只用来打开案例页。
-  pending: { "zh-CN": "等待邮箱确认", "zh-TW": "等待信箱確認", en: "waiting for email confirmation" },
-  verified: { "zh-CN": "等待人工审核", "zh-TW": "等待人工審核", en: "waiting for manual review" },
-  hold: { "zh-CN": "需要补充材料", "zh-TW": "需要補充材料", en: "needs more information" },
-  rejected: { "zh-CN": "未通过", "zh-TW": "未通過", en: "not approved" },
-  expired: { "zh-CN": "已过期", "zh-TW": "已過期", en: "expired" },
 };
 
 export function escapeHtml(value) {
@@ -152,7 +146,9 @@ function t(locale, key) {
 }
 
 function statusLabel(status, locale) {
-  const entry = STATUS_LABEL[status] || STATUS_LABEL.pending;
+  const entry = STATUS_LABEL[status];
+  // 状态机只产出这两个值；表里没有的原样显示，不硬翻成别的状态。
+  if (!entry) return String(status || "");
   return entry[normalizeLocale(locale)] || entry.en;
 }
 

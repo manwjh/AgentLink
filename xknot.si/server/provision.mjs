@@ -95,7 +95,7 @@ export function createRun({ application, tunnel, entryHost, now = new Date() }) 
   const stamp = now.toISOString();
   return {
     applicationId: application.id,
-    instanceId: application.subdomain || host.split(".")[0],
+    instanceId: application.subdomain,
     host,
     account: tunnel.account,
     port: tunnel.port,

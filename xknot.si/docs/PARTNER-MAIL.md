@@ -1,6 +1,6 @@
 # XKnot Federation · Partner Mail Templates
 
-Version 2.2.0.
+Version 2.3.0.
 
 This document is the specification of `xknot.si → partner` mail: events, trigger conditions, recipients, trilingual full text, variables, idempotency keys, and link rules. The runtime source of truth is `server/notify.mjs`; the two must stay in sync. When changing text, change this document first, then the code, bump `TEMPLATE_VERSION`, and run `npm test`.
 
@@ -173,7 +173,6 @@ id and can only be matched by time and recipient domain.
 | `{portalUrl}` | portal entry link | `https://xknot.si/en/` |
 | `{supportUrl}` | outward support entry | optional; empty omits the whole line |
 | `{claimTtl}` | claim validity, following the token's actual TTL (1–168 hours) | `72 小时` |
-| `{subdomain}` | subdomain | `wang.xknot.si` |
 | `{entryHost}` / `{account}` / `{port}` | entry and tunnel | `54.169.33.64` / `knot-tunnel-wang` / `18080` |
 | `{healthUrl}` | probe address | `https://wang.xknot.si/api/health` |
 | `{statusLabel}` | runtime status | `正常` |
@@ -800,7 +799,7 @@ Internal mail goes to the operator and does not enter the partner chain. It is t
 | outward support entry `{supportUrl}` | **pending** | with `no-reply` chosen, the partner has no reply channel. Before launch, decide between the support page and the ticket mailbox; when empty the line is omitted, but then the partner can only rely on the case page |
 | `no-reply@xknot.si` sending auth | configured | Aliyun requires `SMTP_USER` equals `SMTP_FROM`; changing the sending address changes both |
 | `MAIL_FROM` and `Reply-To` consistent | configured | both use `no-reply@xknot.si`, matching the "replies not monitored" wording |
-| template version and text owner | settled | runtime version `TEMPLATE_VERSION=2.2.0`; text changes must change both sides and bump the version |
+| template version and text owner | settled | runtime version `TEMPLATE_VERSION=2.3.0`; text changes must change both sides and bump the version |
 | ownership-verification records | **none** | applications only go by subdomain; before issuance there is no verifiable domain. Acceptance became the post-connection public `/api/health` probe; the `proof_method` / `proof_at` columns are no longer written, and the application object does not return those two fields |
 
 ---

@@ -13,7 +13,6 @@ import { normalizePublicKey, normalizeTags, validateApplication } from "./valida
 
 const valid = {
   name: "北港",
-  mode: "subdomain",
   subdomain: "nordhavn",
   operator: "Lin",
   email: "lin@example.com",
@@ -129,17 +128,14 @@ test("validate: missing and malformed fields report per-field codes", () => {
   assert.equal(result.errors.agree, "required");
 });
 
-test("validate: an own domain is refused — the federation only issues subdomains", () => {
+test("validate: the address comes from the label, stray fields are ignored", () => {
+  // 接入模式与自有域名都已下线：请求里带着它们也不改变结论，地址仍由标签拼出。
   const stale = validateApplication({ ...valid, mode: "own-domain", domain: "https://example.com/" });
-  assert.equal(stale.ok, false);
-  assert.equal(stale.errors.mode, "not_supported");
-  assert.equal(stale.errors.domain, "not_supported");
+  assert.equal(stale.ok, true);
+  assert.equal(stale.value.url, "https://nordhavn.xknot.si");
 
   // 只带自有域名、没有标签时，也拿不到地址。
   assert.equal(validateApplication({ ...valid, subdomain: "", domain: "example.com" }).ok, false);
-  // 老客户端仍写 mode: "subdomain" 时照常受理。
-  assert.equal(validateApplication({ ...valid, mode: "subdomain" }).ok, true);
-  assert.equal(validateApplication({ ...valid, mode: "vpn" }).errors.mode, "not_supported");
 });
 
 test("validate: the subdomain label is the identity, not a full URL", () => {
@@ -1274,7 +1270,7 @@ test("subdomain: 太短、保留词、已占用与可用各给一个理由", asy
   // 名册里的实例占着自己的标签
   assert.equal((await call("/api/subdomains/check?label=nordhavn")).data.reason, "taken");
 
-  // 还在审核里的申请也占着
+  // 已签发的申请也占着
   store.createApplication({ ...valid, subdomain: "pending-one", email: "other@example.com" });
   assert.equal((await call("/api/subdomains/check?label=pending-one")).data.reason, "taken");
 

@@ -94,11 +94,7 @@ export function validateApplication(input) {
   if ([...name].length < 2) errors.name = "too_short";
   else if ([...name].length > LIMITS.name) errors.name = "too_long";
 
-  // 接入只有签发子域一种。带着别的模式或自有域名，明确退回，
-  // 不悄悄忽略：它会以为自己申请了自有域名，实际上什么都没登记。
-  if (raw.mode != null && raw.mode !== "" && raw.mode !== "subdomain") errors.mode = "not_supported";
-  if (String(raw.domain || "").trim()) errors.domain = "not_supported";
-
+  // 地址只看标签：请求里不再有接入模式与自有域名，多带的字段一律不读。
   const label = normalizeLabel(raw.subdomain);
   const checkedLabel = label ? checkLabel(label) : { available: false, reason: "empty" };
   if (!label) errors.subdomain = "required";

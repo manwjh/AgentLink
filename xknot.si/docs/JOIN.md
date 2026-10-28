@@ -63,7 +63,7 @@ the entry appears in the portal map and directory
   - **subdomain label** `subdomain`: **6–32 chars** of lowercase letters, digits, and hyphens, not starting or ending with a hyphen. Fewer than 6 is never issued: short numbers are reserved for later, not handed out in the first batch. System-reserved names (`www`, `api`, `admin`, `mail`, `xknot`, etc.) are not issued.
   - site name, one-line tagline, operator, contact email, region, timezone, tags, consent checkbox. These are only for validation and contact: **they are not written into the manifest**. After launch the owner fills them into the site profile (self-described zone) in their own instance's `/admin`; the hub fetches it via `GET /api/federation/profile`.
   - the region shown on the portal is judged by the hub from this tunnel's egress IP, not the one filled at application: if the machine moves city or data center, the page follows. A wrong value does not block access; it only serves as fallback when the tunnel is down.
-  - `mode` and `domain` are retired. Requests still carrying `mode: "own-domain"` or a non-empty `domain` return `400` with field code `not_supported`, not silently treated as an issuance application.
+  - the address field is only `subdomain`; the retired `mode` / `domain` fields are not read, and sending them does not change the result.
   - on validation failure, the subdomain error codes in `fields` match the precheck: `required` / `too_short` / `too_long` / `format` / `reserved`.
 - During application the hub **fetches nothing** from any site.
 - Resubmitting the same label while `approved` returns `409 duplicate`; after withdrawal a new application may be submitted, to add services or change the label.
@@ -278,7 +278,7 @@ Billing and subdomain services do not happen in the hub's order flow (see the RE
 | Item | Status |
 |----|------|
 | auto-approval / case page / one-time claim page | **implemented**: submission is `approved`, `/case/<caseKey>`, `/claim/<token>`; the email-confirmation gate is removed |
-| address validation | **implemented**: `server/validate.mjs` (subdomain label 6–32 chars, reserved names, same-label dedupe; `mode` / `domain` retired) |
+| address validation | **implemented**: `server/validate.mjs` (subdomain label 6–32 chars, reserved names, same-label dedupe) |
 | subdomain label precheck | **implemented**: `GET /api/subdomains/check`; `ops/subdomain.mjs` judges length, reserved names, taken, and gives candidates |
 | member login (email + auth code) | **implemented**: `/api/member/code`, `/api/member/session`, `/api/member/logout`; the portal right column shows site status, health, activity counts, and showcase count |
 | disconnect reminder and temporary hiding | **implemented**: `ops/watch-health.mjs` + `ops/check-health.mjs` |

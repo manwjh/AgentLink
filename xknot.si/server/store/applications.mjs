@@ -15,13 +15,11 @@ import { jsonList, nowIso, uniqueViolation } from "./util.mjs";
 const TRANSITIONS = {
   approved: ["withdrawn"],
   withdrawn: [],
-  rejected: [],
-  expired: [],
 };
 
 const TERMINAL_STATUSES = new Set(["withdrawn"]);
 
-// 占用子域的状态只有一个：approved。撤回、拒绝、过期都把标签交回中枢。
+// 占用子域的状态只有一个：approved。撤回把标签交回中枢。
 // 预检（takenSubdomains）、提交（findOpenBySubdomain）与库里的唯一索引必须
 // 用同一个集合，否则会出现「预检说可用、提交拿 409」——正是要避免的那种反馈。
 const OCCUPIED_STATUS_SQL = "status = 'approved'";
@@ -35,13 +33,13 @@ const APPLICATION_PATCH_COLUMNS = {
 /** 库里的应用行 → 接口层的形状。成员入口也要用，所以导出。 */
 export function rowToApplication(row) {
   if (!row) return null;
-  // 有标签时地址由标签重算；没有标签的行直接用它自己存的 url，只为还能打开案例页。
+  // 地址由标签拼成；没有标签的只可能是更早的历史行，不猜地址。
   const subdomain = row.subdomain || null;
   return {
     id: row.id,
     name: row.name,
     subdomain,
-    url: subdomain ? subdomainUrl(subdomain) : row.url || null,
+    url: subdomain ? subdomainUrl(subdomain) : null,
     operator: row.operator,
     email: row.email,
     region: row.region,
@@ -73,11 +71,10 @@ export function createApplicationsStore({ db, get, all, event }) {
       return rowToApplication(
         get(
           `select * from applications
-            where (subdomain = ? or url = ?)
+            where subdomain = ?
               and ${OCCUPIED_STATUS_SQL}
             order by created_at desc limit 1`,
-          label,
-          subdomainUrl(label)
+          label
         )
       );
     },
@@ -97,7 +94,7 @@ export function createApplicationsStore({ db, get, all, event }) {
       const mode = "subdomain";
       const subdomain = String(input.subdomain || "").trim() || null;
       const domain = null;
-      const url = subdomain ? subdomainUrl(subdomain) : String(input.url || "").trim();
+      const url = subdomain ? subdomainUrl(subdomain) : "";
 
       // 编号有撞号概率；撞上是主键冲突，不该变成 500：换一个号再试一次即可。
       for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -331,7 +328,7 @@ export function createApplicationsStore({ db, get, all, event }) {
       ).map(rowToApplication);
     },
 
-    // 一个标签只要签发过就算占用；拒绝、过期与撤回都释放它。
+    // 一个标签只要签发过就算占用；撤回就释放它。
     // 集合与 findOpenBySubdomain、唯一索引保持同一份（OCCUPIED_STATUS_SQL）。
     takenSubdomains() {
       return all(

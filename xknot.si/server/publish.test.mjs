@@ -136,7 +136,7 @@ test("publish: the same address under another id is refused", async () => {
     )}\n`
   );
   const result = await publishInstance({
-    application: { ...APP, subdomain: null },
+    application: APP,
     tunnelAccount: "knot-tunnel-cpswang",
     tunnelPort: 18090,
     manifestFile,

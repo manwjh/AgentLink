@@ -130,12 +130,7 @@ export async function submitApplication({ site, subdomain, email, locale, hubOri
     );
 
   try {
-    let { status, data } = await post(payload);
-    // 老中枢（0.2.0 及更早）把 mode 当必填，新中枢反过来拒绝它。
-    // 只在对方明确要 mode 时补发一次，不把停用的字段写回常规请求。
-    if (status === 400 && data?.fields?.mode === "required") {
-      ({ status, data } = await post({ ...payload, mode: "subdomain" }));
-    }
+    const { status, data } = await post(payload);
     if (status === 201) return { ok: true, application: data?.application || null };
     if (status === 400) return { error: "invalid", fields: data?.fields || {} };
     if (status === 409) return { error: "duplicate" };

@@ -737,7 +737,7 @@ Mail relay:
 
 M3: join application
 
-- [ ] the instance `/admin` on-behalf submission returns per-field error codes for missing fields; `mode` not `subdomain` or non-empty `domain` returns `400 not_supported`
+- [ ] the instance `/admin` on-behalf submission returns per-field error codes for missing fields
 - [ ] subdomain under 6 chars, reserved, or malformed gives the same codes as the precheck (`too_short` / `reserved` / `format`)
 - [ ] successful submission returns an id of the form `XK-YYYY-XXXXXX`
 - [ ] resubmitting the same subdomain is 409, no new record
@@ -780,9 +780,9 @@ Application state and transitions:
 submit ──▶ approved ──▶ withdrawn
 ```
 
-`approved` only means "application passed, eligible for listing", unrelated to whether the instance is connected. `rejected` / `expired` are kept read-only. Resubmitting the same address while `approved` returns `409 duplicate`; after withdrawal it is allowed, and adding services or changing the label requires a new application.
+`approved` only means "application passed, eligible for listing", unrelated to whether the instance is connected. Resubmitting the same address while `approved` returns `409 duplicate`; after withdrawal it is allowed, and adding services or changing the label requires a new application.
 
-The application receives one address field: the `subdomain` label (**6–32 chars** lowercase letters, digits, hyphens, reserved names not issued), and `url` is built from it as `https://<label>.xknot.si`. Labels under 6 are never issued. `mode` accepts only `subdomain` and `domain` must be empty: `mode` not `subdomain`, or non-empty `domain`, both return `400` with field code `not_supported`. An illegal `subdomain` gives the same codes as the precheck: `required` / `too_short` / `too_long` / `format` / `reserved`. Ownership verification does not apply: before issuance there is no verifiable domain, and acceptance is the post-connection public `/api/health` probe.
+The application receives one address field: the `subdomain` label (**6–32 chars** lowercase letters, digits, hyphens, reserved names not issued), and `url` is built from it as `https://<label>.xknot.si`. Labels under 6 are never issued. An illegal `subdomain` gives the same codes as the precheck: `required` / `too_short` / `too_long` / `format` / `reserved`. Ownership verification does not apply: before issuance there is no verifiable domain, and acceptance is the post-connection public `/api/health` probe.
 
 The portal's right column no longer takes an application form. Visitors see "log into your XKnot" and the four-step join guide: deploy instance → open `/admin` → pick a subdomain in the instance and submit → submission is approval. The application form is submitted by the instance's own admin page; the hub side's validation, dedup, and auto-approval flow is exactly the same.
 
@@ -808,7 +808,7 @@ The end of the right column's "how to join" states the operator's name and email
 | `GET /api/admin/hub/traffic` | session | the portal's own entry traffic, same daily shape as an instance; reads `var/traffic/hub.json`, falls back to the roster's `hub` for the hostname; empty `days` means not collected yet |
 | `POST /api/admin/mail` | session | mail master switch: `{ enabled: true \| false }`, writes `settings.mail` and takes effect immediately |
 | `POST /api/admin/instances/:id/config` | session | change instance config: `{ instance, member }` two patches, whole-file validation then atomic write-back to `instances.json` and `federation.json`; illegal returns 400 + `fields[]` |
-| `GET /api/admin/applications?status=` | session | list and per-status counts (`approved` / `withdrawn` / `rejected` / `expired`) |
+| `GET /api/admin/applications?status=` | session | list and per-status counts (`approved` / `withdrawn`) |
 | `POST /api/admin/applications/:id/notify` | session | resend a partner event (`event` from PARTNER-MAIL.md); `partner.handoff` is excluded, it has no link to resend and returns 409 `use_handoff` |
 | `POST /api/admin/applications/:id/handoff` | session | signs a one-time claim token and sends the handoff mail, returns `claimUrl`; a reissue retires the link in the previous mail (`claim.revoked` reports how many), and with no usable channel it is 503 `mail_unavailable` with no token left behind |
 | `GET /api/admin/notify-log?limit=&case=` | session | send log |
@@ -851,7 +851,7 @@ Receive-side rules:
 
 - Body cap 16KB, JSON only; a POST whose `Origin` and `Host` disagree returns 403.
 - Field caps match the self-described zone: name 2–40, intro 60, operator 80, email 120, tags 9 (each 16 chars).
-- Subdomain labels accept only lowercase letters, digits, hyphens, 6–32 chars; `mode` not `subdomain` or non-empty `domain` returns `400 not_supported`.
+- Subdomain labels accept only lowercase letters, digits, hyphens, 6–32 chars.
 - The submission request has one hidden field (`website`); filling it marks the submitter as a bot: return success, no storage.
 - Rate limiting counts by source-address hash in-process: submissions 8 per hour, logins 12 per 15 minutes.
 - Passwords use `scrypt` with salt; session tokens are 32-byte randoms, only hashes in the DB, Cookie `HttpOnly`, `SameSite=Strict`, `Path=/`.
@@ -873,7 +873,7 @@ Receive-side rules:
 - After expanding, "edit" changes the config in place without leaving the page: the manifest side's public address, tier, status, join time, showcase and stats addresses, and the roster side's domain, role, standing, tunnel account and port, whether listed, and note. Name, intro, region, timezone, contact are not changed here — that is the instance's own self-described zone, owned by its `/admin`.
 - Saving goes through `POST /api/admin/instances/:id/config`: first the whole thing runs `validateInstances` and `validateRoster`, and only on pass writes back the two JSON files via temp file + rename; on failure the errors list in the form, input is kept, and not one byte of the files changes. Access mode is not changed from the form: `mode` is fixed `subdomain`, and `tunnel` must fill account and port together.
 - For an account not yet in the roster, the form adds a member with default identity (`role: partner`, `standing: regular`, `mode: subdomain`, `listed: true`, `tunnel` from the form's account and port); the whole file is validated before saving, and turning one into a `founder` requires `permanent` and listed. Tier is not the roster's business: a founder can be `free`.
-- Application records list counts for the two states the submission flow can produce (`approved`, `withdrawn`), and clicking a row switches to that category; "approved but not written into the manifest" is flagged separately. Rows still carrying a pre-auto-approval status (`rejected`, `expired`, …) are shown under "all" with their own badge; they get no queue entry of their own, because nothing can create them any more.
+- Application records list counts for the two states the submission flow can produce (`approved`, `withdrawn`), and clicking a row switches to that category; "approved but not written into the manifest" is flagged separately.
 - "Application records" is split by status (approved, withdrawn, all), left list, right detail.
 - Details show site, operator, email, region, timezone, intro, tags, tier, public key, and submit time; the "approval" column states `submission is approval`.
 - **No review action**: submission is approval. To stop a member, change its instance's `status` (suspend / retire).

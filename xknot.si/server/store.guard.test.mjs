@@ -361,7 +361,7 @@ test("schema: a database from before message ids opens, gains the column, keeps 
 
 test("schema: an existing database is not migrated twice", (t) => {
   const { store, file } = withStore(t);
-  store.createApplication(applicationInput({ subdomain: "" , url: "https://example.com" }));
+  store.createApplication(applicationInput());
   store.close();
 
   // 再打开一次：user_version 已经写过，破坏性的 UPDATE 不该再跑一遍。

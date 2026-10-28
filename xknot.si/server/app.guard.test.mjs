@@ -12,7 +12,6 @@ import { openMemoryStore } from "./store.mjs";
 
 const valid = {
   name: "北港",
-  mode: "subdomain",
   subdomain: "nordhavn",
   operator: "Lin",
   email: "lin@example.com",

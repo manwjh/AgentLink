@@ -9,21 +9,9 @@
 //     因此所有需要申请人动作的事都必须给链接，不能写「请回复本邮件」。
 //  2. 正文只放事实：不放内部备注、审核人、IP、哈希，也不放任何凭据明文。
 
-export const TEMPLATE_VERSION = "2.2.0";
+export const TEMPLATE_VERSION = "2.3.0";
 
 const LOCALES = ["zh-CN", "zh-TW", "en"];
-
-// 老数据可能没有 subdomain 列，从 URL 取回标签。
-function subdomainLabelOf(application) {
-  const label = String(application?.subdomain || "").trim().toLowerCase();
-  if (label) return label.replace(/\.xknot\.si$/, "");
-  try {
-    const host = new URL(String(application?.url || "")).hostname.toLowerCase();
-    return host.endsWith(".xknot.si") ? host.slice(0, -".xknot.si".length) : "";
-  } catch {
-    return "";
-  }
-}
 
 export function normalizeLocale(value) {
   const locale = String(value || "").trim().toLowerCase();
@@ -807,7 +795,6 @@ export function buildVars(application, options = {}) {
       : "",
     confirmTtl: { "zh-CN": "30 天", "zh-TW": "30 天", en: "30 days" }[locale],
     claimTtl: claimTtlText(locale, options.claimTtlHours),
-    subdomain: options.subdomain || (subdomainLabelOf(application) ? `${subdomainLabelOf(application)}.xknot.si` : ""),
     entryHost: options.entryHost || "—",
     account: options.account || "—",
     port: options.port || "—",

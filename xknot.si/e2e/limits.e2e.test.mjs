@@ -37,7 +37,6 @@ async function post(pathname, body, headers = {}) {
 test("applications: 每小时第 9 次提交开始 429，并带 retry-after", async () => {
   const base = {
     name: "限流测试",
-    mode: "subdomain",
     subdomain: "e2e-limit-0",
     operator: "Lin",
     email: "lin@e2e-limit.example",

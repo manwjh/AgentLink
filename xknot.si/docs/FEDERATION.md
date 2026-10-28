@@ -628,7 +628,7 @@ Joining is application-based: the owner submits in their own site's `/admin`, th
 
 | Phase | What happens |
 |------|----------|
-| Submit | the owner fills the subdomain label and contact email in the instance `/admin`'s "join XKnot", submitted on the instance's behalf via `POST /api/applications`, with fields subdomain label, name, intro, operator, email, region, timezone, tags; the hub endpoint can also be called directly. `mode` accepts only `subdomain` and `domain` must be empty; any other value returns `not_supported` |
+| Submit | the owner fills the subdomain label and contact email in the instance `/admin`'s "join XKnot", submitted on the instance's behalf via `POST /api/applications`, with fields subdomain label, name, intro, operator, email, region, timezone, tags; the hub endpoint can also be called directly. The address comes only from the `subdomain` label |
 | Check the label | before submitting, ask `GET /api/subdomains/check?label=`. Labels under 6 chars are not issued, nor reserved or taken ones; candidates are given on failure |
 | Auto-approve | the platform validates fields and dedupes; on passing it writes the application as `approved` (`reviewed_by=auto`), no pending queue |
 | Notify | immediately sends the approval letter to the applicant and a new-member alert to the operator |

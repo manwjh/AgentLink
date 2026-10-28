@@ -43,7 +43,7 @@ export function suggestId(url) {
 export function toManifestEntry(application, options = {}) {
   // 地址由标签拼成；标签就是实例 id，签发后不再变。
   const subdomain = String(application.subdomain || "").trim();
-  const url = subdomain ? subdomainUrl(subdomain) : String(application.url || "").replace(/\/$/, "");
+  const url = subdomain ? subdomainUrl(subdomain) : "";
 
   return {
     id: options.id || (ID_RE.test(subdomain) ? subdomain : suggestId(url)),

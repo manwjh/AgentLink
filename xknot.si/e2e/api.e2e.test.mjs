@@ -19,7 +19,6 @@ const ADMIN = "e2e-admin";
 
 const VALID = {
   name: "北港端到端",
-  mode: "subdomain",
   subdomain: "e2e-apply",
   operator: "Lin",
   email: "lin@e2e-apply.example",
@@ -238,7 +237,7 @@ test("admin: 错密码 401，登录后 Cookie 带 HttpOnly / SameSite=Strict", a
 test("applications: 空表单逐字段报错", async () => {
   const result = await call("/api/applications", {
     method: "POST",
-    body: { name: "", mode: "subdomain", subdomain: "nope nope", email: "lin@", agree: false },
+    body: { name: "", subdomain: "nope nope", email: "lin@", agree: false },
   });
   assert.equal(result.status, 400);
   assert.equal(result.data.error, "invalid");
