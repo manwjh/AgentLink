@@ -55,7 +55,7 @@ the entry appears in the portal map and directory
 
 ### 1.1 Application
 
-- Entry: the instance's own `/admin`, the "join XKnot" block (`knot-platform/admin/index.html`), which submits on the instance's behalf to the hub's `POST /api/admin/xknot/apply`.
+- Entry: the instance's own `/admin`, the "join XKnot" block (`knot-platform/admin/index.html`), which submits through the instance's own `POST /api/admin/xknot/apply`; that endpoint hands the self-description to the hub's `POST /api/applications`.
 - The hub portal's right column no longer takes an application form: there it is "log into your XKnot" and the four-step join guide (deploy → `/admin` → pick a subdomain and submit → submission is approval); already-onboarded owners see their site's status, health, and activity counts from here.
 - Endpoint: `POST /api/applications` (`server/app.mjs`). Calling it directly works too, with the same fields as the instance's on-behalf submission.
 - Check the subdomain first: `GET /api/subdomains/check?label=` returns `available`, `reason` (`too_short` / `too_long` / `format` / `reserved` / `taken` / `ok`) and candidate suggestions. In the instance's `/admin` this is the "check" button.
@@ -313,29 +313,14 @@ Bounces and complaints are the instance's own to watch. Abuse can get the shared
 
 ---
 
-## 8. Related-file quick reference
+## 8. Related files
 
-Hub side (this directory `xknot.si/`):
-
-| Path | Use |
-|------|------|
-| `instances.json` | the federation manifest's single source of truth |
-| `docs/HANDOFF.md` | the handoff sheet template from subdomain issuance to instance connection (one subdomain, one account, one port) |
-| `server/app.mjs` / `validate.mjs` / `manifest.mjs` / `admin-cli.mjs` | application, validation, entry generation, manifest writing |
-| `admin/` | console: records, instance config, probes, and mail |
-| `ops/check-health.mjs` | L2 probe and state machine |
-| `ops/watch-health.mjs` | 15-minute patrol, reminders, and hiding |
-| `ops/validate-instances.mjs` | manifest validation |
-| `ops/build-hub.sh` / `deploy-hub.sh` | build and static site sync |
-| `ops/deploy-api.sh` | API, console, and site config sync |
-| `ops/xknot.si.conf` | the portal's nginx |
-
-Instance side (`knot-platform`, current implementation; on a swap, these four are covered by that implementation's own docs):
+The hub's own file map — what each script and directory does — is the single copy in [HUB.md](HUB.md#2-directory); it is not repeated here. For the partner side, the three entry files are:
 
 | Path | Use |
 |------|------|
-| `knot-platform/ops/entry/README.md` | entry + tunnel realization |
-| `knot-platform/sites/_template/entry.example.env` | per-entry site config template (domain, static root, conf, serve mode) |
-| `knot-platform/ops/entry/sshd-tunnel.conf.template` | sshd config for the entry tunnel account |
+| [`knot-platform/ops/entry/README.md`](../../knot-platform/ops/entry/README.md) | entry + tunnel realization |
+| [`knot-platform/sites/_template/entry.example.env`](../../knot-platform/sites/_template/entry.example.env) | per-entry site config template (domain, static root, conf, serve mode) |
+| [`knot-platform/ops/entry/sshd-tunnel.conf.template`](../../knot-platform/ops/entry/sshd-tunnel.conf.template) | sshd config for the entry tunnel account |
 
 Keys, passwords, and PEM paths live only in each machine's private environment and `~/.ssh/`; this document and the repo do not include them.

@@ -8,6 +8,7 @@ Joining is application-based: first deploy a Knot on your own machine, fill in t
 
 - Names and bilingual wording: [docs/NAMING.md](docs/NAMING.md)
 - Contract and fields: [docs/FEDERATION.md](docs/FEDERATION.md)
+- System architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Locale and region: [docs/I18N.md](docs/I18N.md)
 - Implementation and deployment: [docs/HUB.md](docs/HUB.md)
 - Local deployment and end-to-end testing: [docs/E2E.md](docs/E2E.md)
@@ -86,10 +87,12 @@ xknot.si/
 │   ├── NAMING.md          naming conventions: bilingual wording, forbidden words
 │   ├── I18N.md            i18n and region: locale, fallback, region grouping
 │   ├── FEDERATION.md      the contract between hub and instance
+│   ├── ARCHITECTURE.md    the system map: roles, planes, state, failure modes
 │   ├── HUB.md             the hub's implementation, operation, and acceptance
 │   ├── E2E.md             local deployment shape, test layers, coverage matrix
 │   ├── JOIN.md            joining: application, domain, and tunnel
-│   └── federation.svg     architecture diagram
+│   ├── federation.svg     architecture diagram
+│   └── architecture.svg   system map diagram
 ├── e2e/                   end-to-end tests: API/mail with node --test, pages with Playwright
 ├── ops/
 │   ├── xknot.si.conf      nginx config for the portal and API
@@ -151,6 +154,7 @@ The console is at `http://127.0.0.1:5180/admin/`; after login, start with the ov
 | [docs/NAMING.md](docs/NAMING.md) | naming conventions: bilingual wording, forbidden words, code identifiers |
 | [docs/I18N.md](docs/I18N.md) | i18n: locale, fallback chain, region grouping, URLs, and acceptance |
 | [docs/FEDERATION.md](docs/FEDERATION.md) | contract: L1 fields, L2 determination, L3 showcase format, listing and delisting |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the system map: roles, three planes, state ownership, failure modes |
 | [docs/HUB.md](docs/HUB.md) | the hub's implementation, run shapes, and acceptance checklist |
 | [docs/E2E.md](docs/E2E.md) | local deployment shape, test layers, coverage matrix, and troubleshooting |
 | [docs/JOIN.md](docs/JOIN.md) | joining: application flow and access shape (issued subdomain + entry tunnel) |
@@ -158,6 +162,7 @@ The console is at `http://127.0.0.1:5180/admin/`; after login, start with the ov
 | [docs/PARTNER-MAIL.md](docs/PARTNER-MAIL.md) | mail templates and sending rules for partners |
 | [docs/BILLING.md](docs/BILLING.md) | billing: what the paid access subscription entitles, and who charges whom (plan, not implemented) |
 | [docs/federation.svg](docs/federation.svg) | architecture diagram |
+| [docs/architecture.svg](docs/architecture.svg) | system map diagram that accompanies ARCHITECTURE.md |
 | [instances.json](instances.json) | instance manifest: issued-zone fields |
 | [federation.json](federation.json) | federation roster: membership identity, access mode, tunnel account and port |
 | [ops/xknot.si.conf](ops/xknot.si.conf) | nginx config for the portal |

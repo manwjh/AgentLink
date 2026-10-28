@@ -1,6 +1,6 @@
 # XKnot Federation · Partner Mail Templates
 
-Version 2.1.
+Version 2.2.0.
 
 This document is the specification of `xknot.si → partner` mail: events, trigger conditions, recipients, trilingual full text, variables, idempotency keys, and link rules. The runtime source of truth is `server/notify.mjs`; the two must stay in sync. When changing text, change this document first, then the code, bump `TEMPLATE_VERSION`, and run `npm test`.
 
@@ -137,7 +137,7 @@ unknown id is refused rather than guessed: marking a delivered message as bounce
 send the operator to resend a second copy. Rows written before this field existed have no
 id and can only be matched by time and recipient domain.
 
-### 1.6 Links
+### 1.7 Links
 
 | Item | Rule |
 |----|------|
@@ -149,7 +149,7 @@ id and can only be matched by time and recipient domain.
 | Validity | claim page 72 hours, single use |
 | Body wording | the mail says where to claim, never what is on the claim page. The payload is chosen per delivery, so a fixed list of contents would promise items that this delivery does not carry |
 
-### 1.7 Variable hygiene
+### 1.8 Variable hygiene
 
 - All variables are inserted after stripping `\r`, `\n`; user-filled fields do not enter mail headers.
 - `name` ≤40, `operator` ≤80, `url` ≤200, `{id}` ≤32, truncated beyond.

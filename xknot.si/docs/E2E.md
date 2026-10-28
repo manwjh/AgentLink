@@ -121,7 +121,18 @@ Each end-to-end file starts its own deployment, sharing no port, database, or ra
 - `handoff` generates a one-time claim link: `GET /claim/<token>` does not consume it, `POST /api/claim` returns the plaintext only once, then 409; the mail body contains no credentials.
 - Reissuing a handoff retires the link from the previous mail: it answers 410 and reveals nothing; `notify` refuses `partner.handoff`.
 
-### 4.3 Mail relay (`e2e/relay.e2e.test.mjs`)
+### 4.3 Partner onboarding (`e2e/partner.e2e.test.mjs`)
+
+This file walks the whole path the way a partner would, with real HTTP, a real SMTP session, and real tokens recovered from the mail body — no reading the database and no test back door:
+
+- submit → immediately `approved`, approval letter received, and no verification step anywhere.
+- the `/case/` page shows status, accepts a public key, and after withdrawal refuses further review.
+- `handoff` sends a one-time claim link; the mail body holds no credential plaintext.
+- reissuing `handoff` revokes the previous link: it answers 410 and leaks nothing.
+- the claim page only renders (`no-store`), consuming it must be `POST`, and the same token works once (the second `POST` is 409).
+- the message after the first claim checks `/api/admin/applications/<id>/manifest` and asserts the entry is written as `pending`, with `url` and `id` derived from the subdomain label.
+
+### 4.4 Mail relay (`e2e/relay.e2e.test.mjs`)
 
 - A credential issued by the `admin-cli relay-token` command can send; the recipient sees `From` as `MAIL_FROM`, `Reply-To` defaults to the instance `contact`, and the message carries `X-XKnot-Instance`.
 - `GET /api/federation/mail` returns the 24-hour quota; retrying the same idempotency key does not resend.
@@ -132,18 +143,20 @@ Each end-to-end file starts its own deployment, sharing no port, database, or ra
 - Daily quota exhausted is 429; the 7th mail per minute per credential is 429.
 - SMTP unavailable is 502, `relay-log` records `failed`, and the log contains no body or full address.
 
-### 4.4 Rate limiting (`e2e/limits.e2e.test.mjs`)
+### 4.5 Rate limiting (`e2e/limits.e2e.test.mjs`)
 
 - From the 9th submission per hour it is 429, with `retry-after`.
 - From the 13th login per 15 minutes it is 429.
 
-### 4.5 Browser (`e2e/browser/*.spec.mjs`)
+### 4.6 Browser (`e2e/browser/*.spec.mjs`)
 
 | File | Coverage |
 |------|------|
 | `portal.spec.mjs` | renders all cards from `hub.json`, map visible, entries link back to origin; trilingual switching and `aria-current`; light/dark; region filter and "online only"; "showcase only"; no horizontal overflow at 360/390/768/1280; keyboard reachability and form labels; no script errors under CSP |
 | `member.spec.mjs` | right column has only the email field and the four-step join guide, no application form; no request until the email is complete; after logging in with a code from real mail, see the site's status, health, and counts; no state leftover after logout; at 390px the two fields and login button are ≥44px and the right column does not overflow |
-| `admin.spec.mjs` | login failure message; login → open an approved application → generate manifest entry → logout; clicking an instance expands its config in place; in-place edit, illegal values not written, draft not lost; approved applications no longer offer an approve action and the list doesn't duplicate; no script errors under CSP |
+| `admin.spec.mjs` | login failure message; login → overview shows the four panels and the mail master switch (disabled without SMTP); open an approved application → generate manifest entry → logout; clicking an instance expands its config in place; in-place edit, illegal values not written, draft not lost; approved applications no longer offer an approve action and the list doesn't duplicate; a failed list read leaves an error bar and no stale rows; no script errors under CSP |
+
+The console exposes stable hooks for these cases — `data-view` on the nav, `data-panel` on the overview panels, `data-status` on tabs, queue rows, and badges, `data-action` on the buttons each case drives. Copy changes then do not break the tests, and neither do the tests pin the current wording.
 
 Browser cases also assert the page has **no** `pageerror` and no CSP violation. This assertion has caught two real classes of bug: inline styles blocked by the console CSP, and fonts inlined by Vite as `data:` then blocked by `font-src 'self'`.
 
@@ -155,7 +168,7 @@ Browser cases also assert the page has **no** `pageerror` and no CSP violation. 
 | region filter, card grid, showcase toggle, `online only` | `portal.spec.mjs` |
 | 360/390/768/1280 readable and clickable, no horizontal overflow | `portal.spec.mjs` |
 | no write requests except the application; only same-origin data | `portal.spec.mjs` network and render assertions, CSP |
-| application form per-field errors, id format, duplicate prompt | `join.spec.mjs`, `api.e2e.test.mjs` |
+| application form per-field errors, id format, duplicate prompt | `partner.e2e.test.mjs`, `api.e2e.test.mjs` |
 | unauthenticated 401, auto-approval and manifest entry | `api.e2e.test.mjs`, `admin.spec.mjs` |
 | cross-site POST 403, consecutive submissions 429 | `api.e2e.test.mjs`, `limits.e2e.test.mjs` |
 | credential issue/revoke, quota, idempotency, SMTP failure | `relay.e2e.test.mjs` |

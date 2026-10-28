@@ -42,8 +42,8 @@
     <text x="600" y="190" font-size="12" fill="#333">每 15 分钟</text>
     <text x="600" y="206" font-size="12" fill="#333">every 15 min</text>
     <text x="803" y="172" font-size="14" font-weight="600" fill="#111">申请与收录 · Apply &amp; list</text>
-    <text x="803" y="190" font-size="12" fill="#333">人工确认后写清单</text>
-    <text x="803" y="206" font-size="12" fill="#333">listed after manual confirmation</text>
+    <text x="803" y="190" font-size="12" fill="#333">提交即通过后写清单</text>
+    <text x="803" y="206" font-size="12" fill="#333">listed on approval</text>
     <text x="600" y="238" font-size="13" fill="#333">只读三层信息 · 写入只有加入申请与委托发信</text>
     <text x="600" y="256" font-size="13" fill="#333">read-only three layers · writes only join application and relayed mail</text>
 
@@ -81,8 +81,8 @@
 
   <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" text-anchor="start">
     <text x="40" y="34" font-size="20" font-weight="600" fill="#111">XKnot 联邦：中枢、实例、橱窗、委托发信 · XKnot Federation: hub, instances, showcase, relayed mail</text>
-    <text x="40" y="58" font-size="13" fill="#555">中枢只读三层信息。写入只有加入申请与委托发信，都不改清单与快照。三语输出：en / zh-CN / zh-TW。</text>
-    <text x="40" y="76" font-size="13" fill="#555">The hub reads three layers only. Writes are only join applications and relayed mail, neither touching the list or snapshot. Three locales: en / zh-CN / zh-TW.</text>
+    <text x="40" y="58" font-size="13" fill="#555">中枢只读三层信息。写入只有加入申请与委托发信；清单与快照由中枢自己写。三语输出：en / zh-CN / zh-TW。</text>
+    <text x="40" y="76" font-size="13" fill="#555">The hub reads three layers only. Writes are only join applications and relayed mail; the hub writes its own list and snapshot. Three locales: en / zh-CN / zh-TW.</text>
     <text x="40" y="664" font-size="12" fill="#666">每个实例的数据、账号、积分和审核都留在自己的库里。中枢只有一份清单、一份探测结果、伙伴发布的橱窗副本，以及不含正文的发信记录。</text>
     <text x="40" y="684" font-size="12" fill="#666">Each instance keeps its data, accounts, points and review in its own database. The hub holds only a list, probe results, partner showcase copies, and mail records without bodies.</text>
   </g>

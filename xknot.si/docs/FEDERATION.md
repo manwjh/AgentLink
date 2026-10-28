@@ -1,241 +1,237 @@
-# XKnot 联邦 · 中枢契约
+# XKnot Federation · Hub Contract
 
-版本 2.1。中枢是轻量入口。
+Version 2.1. The hub is a lightweight entry.
 
-> L1 分成**签发区**（`instances.json`，中枢写）与**自述区**（`sites/<站点>/profile.json`，主理人在实例 `/admin` 里写）。中枢按 `url` 取回 `GET /api/federation/profile`，副本落 `var/profiles/{id}.json`。改名、换联系方式直接改自述区，不必向中枢提交或审批。
+> L1 divides into an **issued zone** (`instances.json`, hub-written) and a **self-described zone** (`sites/<site>/profile.json`, written by the owner in the instance `/admin`). The hub fetches `GET /api/federation/profile` via `url`, with the copy landing in `var/profiles/{id}.json`. Renaming or changing contact info is edited in the self-described zone, no submission or approval to the hub.
 
-> 接入只有一种形态——中枢签发 `<标签>.xknot.si`，入口主机 + SSH 反向隧道。名册用 `mode` + `tunnel` 记接入，清单用 `url` + `status` 记身份与验收状态。术语见 [NAMING.md](NAMING.md)。
+> Access has only one shape: the hub issues `<label>.xknot.si`, entry host + SSH reverse tunnel. The roster records access via `mode` + `tunnel`, and the manifest records identity and acceptance status via `url` + `status`. Terms in [NAMING.md](NAMING.md).
 
-术语与中英文写法见 [NAMING.md](NAMING.md)，语种与区域规则见 [I18N.md](I18N.md)。本文出现的概念名以那两份为准。
+Terms and bilingual wording in [NAMING.md](NAMING.md), locale and region rules in [I18N.md](I18N.md). Concept names in this document follow those two.
 
-![XKnot 联邦架构](federation.svg)
+![XKnot Federation architecture](federation.svg)
 
-## 0. 摘要
+## 0. Summary
 
-`xknot.si` 是 XKnot 联邦的中枢，提供三项信息：**站点档案、运行状态、热点橱窗**。用户、内容、积分和运营属于各实例。
+`xknot.si` is the hub of the XKnot Federation, providing three kinds of information: **site profiles, runtime status, and showcases**. Users, content, points, and operation belong to each instance.
 
-另有一项单向服务：**委托发信**（第 7 节）。实例把一封纯文本通知交给中枢的 SMTP 送出，因为联邦只有一张已验证的发信地址。它不属于上面三层信息，也不写中枢的数据。
+There is one additional one-way service: **mail relay** (section 7). An instance hands a plain-text notification to the hub's SMTP for delivery, because the federation has only one verified sending address. It is not one of the three information layers, and it does not write the hub's manifest or snapshot; the credential is written into the access material by default, and the hub can suspend acceptance per instance.
 
-## 1. 三层信息
+## 1. Three layers of information
 
-中枢与实例之间只交换三层信息，按谁写、谁读、信任等级划分：
+The hub and an instance exchange only three layers of information, divided by who writes, who reads, and the trust level:
 
-| 层 | 名字 | 谁写 | 流向 | 变化频率 | 信任 |
+| Layer | Name | Who writes | Flow | Change frequency | Trust |
 |----|------|------|------|----------|------|
-| **L1** | 站点档案 | 中枢写签发区，主理人写自述区 | 中枢读自己的清单，再按 `url` 取回自述区 | 签发很少，自述随时 | 签发区是中枢的权威身份；自述区是伙伴的表达 |
-| **L2** | 运行状态 | 实例（机器生成） | 中枢 GET | 分钟级 | 可验证的事实 |
-| **L3** | 热点橱窗 | 伙伴（发布在自己站点） | 中枢 GET | 天级 | 伙伴的表达，中枢免审 |
+| **L1** | site profile | hub writes the issued zone, owner writes the self-described zone | hub reads its own manifest, then fetches the self-described zone via `url` | issuance rare, self-description anytime | the issued zone is the hub's authoritative identity; the self-described zone is the partner's expression |
+| **L2** | runtime status | instance (machine-generated) | hub GETs | minute-level | verifiable fact |
+| **L3** | showcase | partner (published on their own site) | hub GETs | day-level | the partner's expression, the hub does not review |
 
-一条规则贯穿三层：
+One rule runs through all three layers:
 
-> **中枢只读：一切由中枢主动 GET，清单是唯一的写入口。**
+> **The hub is read-only: everything is GET'd by the hub, and the manifest is the only write entry.**
 
-伙伴登记一个 URL，内容留在自己站点，中枢按时去取。这带来三个性质：
+A partner registers a URL, content stays on their own site, and the hub fetches on schedule. This yields three properties:
 
-- 中枢没有数据接收接口，不需要令牌、接收校验、限流和原子写。
-- 伙伴不需要向中枢提交材料，也不需要通知任何人。
-- 网关只有一个：`instances.json`。改条目、提交、发布，就是全部操作。
+- The hub has no data-receiving endpoint, so no tokens, receive validation, rate limiting, or atomic writes.
+- A partner does not need to submit material to the hub, nor notify anyone.
+- There is only one gate: `instances.json`. Changing, submitting, and publishing an entry is the entire set of operations.
 
-`instances.json` 只管对外展示的字段。网络成员的事实——创始实例、接入形态、隧道账号与端口——记在同目录的 `federation.json`（联邦名册）。名册不参与门户渲染，两份文件在构建前交叉校验，对不上就不发布。
+`instances.json` manages only portal-facing fields. The network's membership facts — founding instance, access mode, tunnel account and port — live in the sibling `federation.json` (the federation roster). The roster does not participate in portal rendering; the two files are cross-checked before the build, and a mismatch stops publication.
 
-唯一的例外是第 7 节的**委托发信**：实例 POST 一封信给中枢的 SMTP。它不写清单、不写快照、不留正文，也不是第四层信息，只是一项送信服务。
+The only exception is section 7's **mail relay**: the instance POSTs a message to the hub's SMTP. It does not write the manifest, does not write the snapshot, does not keep the body, and is not a fourth information layer — just a delivery service.
 
-三层的信任等级不同：
+The three layers differ in trust:
 
-- L2 是伙伴无法否认的事实。站点不可达就是 `down`；自报的活跃度只做展示。
-- L3 是伙伴主动挑选的表达。展示什么由伙伴决定，中枢负责取回、渲染并跳回原站。
+- L2 is a fact the partner cannot deny. An unreachable site is `down`; self-reported activity is display-only.
+- L3 is an expression the partner actively picks. What to show is the partner's choice; the hub fetches, renders, and links back.
 
-## 2. 职责边界
+## 2. Responsibility boundary
 
-### 2.1 中枢负责
+### 2.1 The hub is responsible for
 
-- 维护 `instances.json` 与清单校验。
-- 构建时探测 `/api/health`，写 `var/health.json`。
-- 构建时取回 `url` + `/api/federation/profile`，写 `var/profiles/{id}.json`。
-- 构建时拉取 `statsUrl`，写 `var/stats/{id}.json`。
-- 构建时拉取 `cardsUrl`，写 `var/cards/{id}.json`。
-- 构建三语门户：Vue 3 + Vite，产物是静态文件，运行时只读 `/data/hub.json`。
-- 整组下架违规实例的橱窗。
-- 按第 7 节代实例发信，维护凭据、额度与发信记录。
+- Maintaining `instances.json` and manifest validation.
+- Probing `/api/health` at build time, writing `var/health.json`.
+- Fetching `url` + `/api/federation/profile` at build time, writing `var/profiles/{id}.json`.
+- Fetching `statsUrl` at build time, writing `var/stats/{id}.json`.
+- Fetching `cardsUrl` at build time, writing `var/cards/{id}.json`.
+- Building the trilingual portal: Vue 3 + Vite, output is static files, runtime reads only `/data/hub.json`.
+- Delisting the whole showcase group of a violating instance.
+- Relaying mail for instances per section 7, maintaining credentials, quota, and the send log.
 
-### 2.2 实例负责
+### 2.2 The instance is responsible for
 
-- 用户、会话、账号、积分、订单和结算。
-- 内容发布、编辑、撤下、审核与投诉处理。
-- 图片和媒体托管。
-- 自己的数据库、备份、域名和证书。
-- 对欧盟用户的数据主体请求。
+- Users, sessions, accounts, points, orders, and settlement.
+- Content publishing, editing, removal, review, and complaint handling.
+- Image and media hosting.
+- Its own database, backups, domain, and certificate.
+- Data-subject requests for EU users.
 
-### 2.3 新增能力的判定
+### 2.3 Judgment for new capabilities
 
-新增一项能力，数据来源必须满足下面之一：
+A new capability's data source must satisfy one of:
 
-1. 写在 `instances.json` 里，由中枢写入（常驻 worker 或命令行）。
-2. 由中枢按清单里的 URL 主动 GET。
+1. Written into `instances.json`, by the hub (the resident worker or the command line).
+2. GET'd by the hub from the manifest's URL.
 
-中枢不接收写入，也不存伙伴的数据。清单之外的数据都由实例发布，中枢只取回副本。
+The hub accepts no writes and stores no partner data. Data outside the manifest is published by the instance, and the hub only fetches a copy.
 
-委托发信是唯一的写调用，判定条件另算：它必须绑定清单里的实例、只发纯文本、不留正文、
-有独立凭据与额度、可随时吊销，且不改变中枢的任何数据。不满足就不做。
+Mail relay is the only write call, judged separately: it must bind to a listed instance, send only plain text, keep no body, have its own credential and quota, be revocable or suspendable at any time, and change none of the hub's data. If not, do not do it.
 
-## 3. 实施里程碑
+## 3. Implementation milestones
 
-| 里程碑 | 范围 | 交付 |
+| Milestone | Scope | Delivers |
 |--------|------|------|
-| **M1** | L1 档案、L2 健康探测、三语门户、区域筛选 | 静态站 + 构建脚本 |
-| **M2** | L3 热点橱窗、L2 活动数据 | 增加拉取步骤与门户橱窗位 |
+| **M1** | L1 profile, L2 health probe, trilingual portal, region filter | static site + build scripts |
+| **M2** | L3 showcase, L2 activity data | added fetch steps and a portal showcase slot |
 
-两个里程碑都在构建时取数，只产出静态文件，没有常驻服务。
+Both milestones fetch at build time, producing only static files, with no resident service.
 
-## 4. L1：站点档案
+## 4. L1: site profile
 
-L1 装在两处，按谁有权改划分：
+L1 lives in two places, divided by who may change it:
 
-| 区 | 字段 | 存在哪 | 谁写 |
+| Zone | Fields | Stored in | Who writes |
 |----|------|--------|------|
-| **签发区** | `id`、`url`、`since`、`tier`、`status`、`cardsUrl`、`statsUrl` | `xknot.si/instances.json` | 中枢 |
-| **自述区** | `name`、`locale`、`tagline`、`intro`、`logo`、`owner`、`contact`、`region`、`timezone`、`tags` | 实例的 `sites/<站点>/profile.json` | 主理人，在实例 `/admin` 里编辑 |
-| **观测区** | `health`、`locations`（出口 IP 判出的国家码） | 中枢的 `var/health.json`、`var/geoip/locations.json` | 中枢自己：探测与隧道对端，实例无从声明 |
+| **issued zone** | `id`, `url`, `since`, `tier`, `status`, `cardsUrl`, `statsUrl` | `xknot.si/instances.json` | the hub |
+| **self-described zone** | `name`, `locale`, `tagline`, `intro`, `logo`, `owner`, `contact`, `region`, `timezone`, `tags` | the instance's `sites/<site>/profile.json` | the owner, edited in the instance `/admin` |
+| **observed zone** | `health`, `locations` (country code judged from the egress IP) | the hub's `var/health.json`, `var/geoip/locations.json` | the hub itself: probes and the tunnel peer; the instance cannot declare it |
 
-中枢不接收写入：签发区改清单、提交、发布；自述区由主理人在自己站点改，中枢下次构建时按 `url` 取回。观测区只由中枢写，任何一方都不能在接口里改它。三区合起来才是门户上的一条档案。
+The hub accepts no writes: the issued zone changes through manifest edit, submit, publish; the self-described zone is changed by the owner on their own site and fetched by the hub at the next build via `url`. The observed zone is written only by the hub; neither side can change it through an endpoint. Only the three zones together make one profile on the portal.
 
-### 4.1 签发区
+### 4.1 Issued zone
 
-单一真源：`instances.json`。修改、提交、发布即完成一次变更。没有后台和审批界面。
+Single source of truth: `instances.json`. An edit, submit, publish is one change. There is no backend and no approval UI.
 
-| 字段 | 约束 |
+| Field | Constraint |
 |------|------|
-| `id` | 小写字母、数字、连字符，2–32 位，清单内唯一，不可改 |
-| `url` | 身份地址，各语种共用。恒为中枢签发的 `https://<标签>.xknot.si`；落在其它域名下会被校验拒绝 |
-| `since` | ISO 日期，收录日 |
-| `tier` | `demo`、`free`、`paid`。展示名次；缺项校验不过，读取方不补默认值 |
-| `status` | `pending`、`active`、`suspended`、`retired`。运营决定；缺项校验不过，读取方不补默认值 |
-| `statsUrl` | 可空。有值时拉取 L2 活动数据 |
-| `cardsUrl` | 可空。有值时拉取 L3 橱窗 |
+| `id` | lowercase letters, digits, hyphens, 2–32 chars, unique in the manifest, immutable |
+| `url` | the identity address, shared by all locales. Always the hub-issued `https://<label>.xknot.si`; anything under another domain is rejected by validation |
+| `since` | ISO date, the listing day |
+| `tier` | `demo`, `free`, `paid`. A display rank; a missing value fails validation and readers add no default |
+| `status` | `pending`, `active`, `suspended`, `retired`. An operator decision; a missing value fails validation and readers add no default |
+| `statsUrl` | nullable. When set, L2 activity data is fetched |
+| `cardsUrl` | nullable. When set, the L3 showcase is fetched |
 
-五项都由中枢写定。实例侧的 `xknot.env` 里那几项是**回执**：只保存与转述，不解释取值、不补默认值、不因取值不认识而拒绝启动。中枢自己也不从回执取值——`fetch-profile` 只把回执与清单比对，不一致记一条问题，仍以清单为准。
+All five fields are written by the hub. The matching keys in the instance's `xknot.env` are a **receipt**: they store and restate, they do not interpret the value, add no default, and do not refuse to start over an unknown value. The hub does not read its own decisions back from that receipt either — `fetch-profile` only compares it with the manifest, records a problem on a mismatch, and still goes by the manifest.
 
-条目里出现自述区字段（`name`、`logo`、`intro` 等）会被 `ops/validate-instances.mjs` 拒绝：那些属于主理人，不能从中枢这边改。
+Self-described zone fields (`name`, `logo`, `intro`, etc.) appearing in an entry are rejected by `ops/validate-instances.mjs`: those belong to the owner and cannot be changed from the hub side.
 
-### 4.2 自述区
+### 4.2 Self-described zone
 
-主理人在实例的 `/admin` → **XKnot** 里编辑，落在 `sites/<站点>/profile.json`；实例通过 `GET /api/federation/profile` 公开它。字段、上限、必填项与校验规则见 [`knot-platform/docs/PROFILE.md`](../../knot-platform/docs/PROFILE.md)；两边的实现是 `ops/profile-schema.mjs` 与 `knot-platform/backend/src/profile.js`，以本仓库的 `ops/profile-schema.mjs` 为准。
+The owner edits it in the instance's `/admin` → **XKnot**, landing in `sites/<site>/profile.json`; the instance publishes it via `GET /api/federation/profile`. Fields, limits, required items, and validation rules are in [`knot-platform/docs/PROFILE.md`](../../knot-platform/docs/PROFILE.md); the two implementations are `ops/profile-schema.mjs` and `knot-platform/backend/src/profile.js`, with this repo's `ops/profile-schema.mjs` as authoritative.
 
-格式是 `{ "formatVersion": 2, "updatedAt": "YYYY-MM-DD", "site": { … } }`，十项扁平字段：
+The format is `{ "formatVersion": 2, "updatedAt": "YYYY-MM-DD", "site": { … } }`, ten flat fields:
 
-| 字段 | 类型 | 上限 | 必填 | 门户上出现在哪 |
+| Field | Type | Limit | Required | Where it appears on the portal |
 |------|------|------|------|---------------|
-| `name` | 字符串 | 40 | 是 | 卡片名称、地图标点 |
-| `locale` | `zh-CN` / `zh-TW` / `en` | — | 否 | 门户不上屏。实例用它决定访客第一次打开时的界面语言 |
-| `tagline` | 字符串 | 60 | 否 | 卡片的一句话 |
-| `intro` | 字符串 | 800 | 否 | 卡片正文 |
-| `logo` | https 地址 | 300 | 否 | 卡片徽记 |
-| `owner` | 字符串 | 40 | 否 | 卡片页脚的主理人 |
-| `contact` | 字符串 | 120 | 否 | 只存在副本里，不直接上屏 |
-| `region` | 两位国家码或 `GLOBAL` | 2 | 否 | 区域分组与地图定位；有出口 IP 观测值时以观测值为准，见 `HUB.md` 第 4 节 |
-| `timezone` | IANA 名 | 40 | 否 | 卡片上的当地钟点；缺省时按出口 IP 的国家推一个并标注，见 `HUB.md` 第 4 节 |
-| `tags` | 字符串数组 | 9 个 × 16 | 否 | 卡片标签与标签筛选 |
+| `name` | string | 40 | yes | card name, map dot |
+| `locale` | `zh-CN` / `zh-TW` / `en` | — | no | not shown on the portal. The instance uses it to pick the first-visit UI language |
+| `tagline` | string | 60 | no | the card's one-liner |
+| `intro` | string | 800 | no | card body |
+| `logo` | https address | 300 | no | card badge |
+| `owner` | string | 40 | no | the owner in the card footer |
+| `contact` | string | 120 | no | only in the copy, not shown directly |
+| `region` | two-letter country code or `GLOBAL` | 2 | no | region grouping and map placement; when an egress-IP observation exists, it wins, see `HUB.md` section 4 |
+| `timezone` | IANA name | 40 | no | the local clock on the card; when missing, derived from the egress-IP country and marked, see `HUB.md` section 4 |
+| `tags` | string array | 9 × 16 | no | card tags and tag filtering |
 
-要点：
+Key points:
 
-- **没有多语种文案映射**：主理人用哪种语种写，门户就显示哪种。中枢不翻译，也不按界面语种挑一份。`locale` 不是文案语种，是实例界面的默认语言，门户只校验取值。
-- `tags` 是自由文本：不预设词表、不按语义合并、不翻译；只做去空白、忽略大小写去重、保留主理人排的顺序。
-- `logo` 是 https 绝对地址。自述区里的图片只存地址，不进中枢的二进制。
-- `region` 是主理人写的**声明**，不是中枢认定的位置。门户对位置的显示以隧道对端的出口 IP 为准（GeoIP，只有国家码）；声明值在没有观测时兜底，例如实例离线或中枢不在入口主机上。
-- 空的字符串不要写：清掉一项就整键省略。不认识的键整份被拒（见 `ops/profile-schema.mjs` 的 `SITE_FIELDS`）。
+- **No per-locale text mapping**: whatever language the owner writes is what the portal shows. The hub does not translate, nor pick one per UI locale. `locale` is not the text language; it is the instance UI's default language, and the portal only validates its value.
+- `tags` is free text: no preset vocabulary, no semantic merging, no translation; only whitespace stripping, case-insensitive dedup, and preserving the owner's order.
+- `logo` is an https absolute address. Images in the self-described zone store only the address; no binary enters the hub.
+- `region` is a **declaration** the owner writes, not a location the hub asserts. The portal's location display follows the tunnel peer's egress IP (GeoIP, country code only); the declared value is only the fallback when there is no observation, e.g. the instance is offline or the hub is not on the entry host.
+- Do not write empty strings: clearing a field omits the whole key. Unknown keys drop only that one field, not the whole profile (field table in `ops/profile-schema.mjs`'s `SITE_FIELDS`).
 
-### 4.3 取回与缓存
+### 4.3 Fetch and cache
 
-构建时 `ops/fetch-profile.mjs` 对每个 `status: active` 的条目取 `url` + `/api/federation/profile`：
+At build time `ops/fetch-profile.mjs` fetches `url` + `/api/federation/profile` for each `status: active` entry:
 
-- 校验 `formatVersion`、`issued.id` 等于清单 id、`issued.url` 与清单 `url` 同主机；
-- 自述区过 `cleanSite`（`ops/profile-schema.mjs`）：整份不合法则保留上一份，取回结果仍带 `site`；
-- 响应上限 64KB，带 ETag，`304` 视为未变化；
-- 写 `var/profiles/{id}.json`，带 `fetchedAt` 与 `source`；取不到时不清旧文件。
+- validates `formatVersion`, `issued.id` equals the manifest id, and `issued.url` is on the same host as the manifest `url`;
+- the self-described zone goes through `cleanSite` (`ops/profile-schema.mjs`): only a missing `name` drops the whole profile and keeps the previous copy; other problems drop only that one field, the rest is kept;
+- response cap 64KB, with ETag, `304` treated as unchanged;
+- writes `var/profiles/{id}.json`, with `fetchedAt` and `source`; a failed fetch does not clear the old file.
 
-门户只用这份副本：缺字段时用签发区字段与兜底文案补齐，不会因此把条目算成 down（那是 L2 的事）。
+The portal only uses this copy: missing fields are filled with issued-zone fields and fallback text, never counting the entry as down (that is L2's business).
 
-**升级顺序：先实例，后门户。** 取回时 `formatVersion` 不是 2 的响应会被整份拒绝、保留上一份副本；没有 `site` 的副本门户对这条只显示 id。`deploy-hub.sh` 前的 `ops/verify-hub-data.mjs` 会把「有签发区但没有自述区名称」判成问题并挡住发布，正是为了让这个顺序显式发生。
+**Upgrade order: instance first, portal second.** On fetch, a response whose `formatVersion` is not 2 is rejected whole and the previous copy kept; an old copy has no `site`, so the portal shows only the id for that entry. `ops/verify-hub-data.mjs` before `deploy-hub.sh` treats "has an issued zone but no self-described name" as a problem and blocks publication, precisely to make this order explicit.
 
-**新增自述区字段时反过来：先中枢，后实例。** `cleanSite` 拒绝未知键，整份不合法就保留上一份副本。`locale` 就是这样加进来的：中枢的 `SITE_FIELDS` 先收下它，实例再开始写；顺序反了不会崩，但门户上这个站点的改名、换介绍会静默停在旧副本，只在 `var/` 里留几条问题记录。
+**When adding a self-described field, the reverse: hub first, instance second.** `cleanSite` only accepts keys in `SITE_FIELDS`; unknown keys are dropped without rejecting the whole profile. `locale` was added exactly this way: the hub's `SITE_FIELDS` accepted it first, then the instance started writing it; reversing the order does not crash, but the site's locale keeps using the fallback on the portal, with a few problem records left in `var/`.
 
-### 4.4 规则
+### 4.4 Rules
 
-- **一个字段只有一个主人。** 签发区五项由中枢在 `instances.json` 里写定；实例只保存与转述，不解释、不补默认值。
-- 五项都必填，`ops/validate-instances.mjs` 会拦住缺项。**因此读的地方不写默认值**：清单缺一项就是数据错误，不是「免费」或「在线」。门槛在构建前，不在每次读取时。
-- 探测地址由 `url` 推出，不单独登记；`statsUrl`、`cardsUrl` 决定中枢还拉什么数据，字段为空即跳过，不报错。
-- `tier` 是展示名次：决定门户里同一批条目的先后（`demo` > `paid` > `free`，同级按 `since`，再按 `id`），不影响功能、额度或分成，也不由 `role` 推出。
-- `status` 是运营决定：`pending` 不探不列，`active` 才探测与上门户，`suspended` / `retired` 保留条目但不服务。它是中枢对实例的唯一裁定，`health` 的观测结果不能写回它。
-- 示范条目可以标 `tier: demo`，不计入实例统计。
-- 区域只用于分组浏览，不参与排序，不影响收录。
-- 名册的 `role` 与清单的 `tier` 互不约束：角色是联邦里的身份，分级是档案的名次。
-- 清单必须通过 `ops/validate-instances.mjs` 才发布。
+- The probe address is derived from `url`, not registered separately; `statsUrl` and `cardsUrl` decide what else the hub fetches, and an empty field is skipped without error.
+- `tier` only affects the display badge, not sorting, not rating or revenue sharing.
+- Sample entries may be marked `tier: demo` and are not counted in instance statistics.
+- Pages sort by `tier`, then `since`, stably.
+- Region is only for grouped browsing, not sorting, and does not affect listing.
+- The manifest must pass `ops/validate-instances.mjs` before publication.
 
-### 4.5 接入形态
+### 4.5 Access mode
 
-接入只有一种，身份就是 `url` 本身，没有第二根轴：
+Access has only one shape; identity is the `url` itself, with no second axis:
 
-| `federation.json` 的 `mode` | 身份 | 入口与隧道 |
+| `federation.json` `mode` | Identity | Entry and tunnel |
 |------|------|------------|
-| `subdomain` | `https://<标签>.xknot.si`，由中枢签发 | 入口托管静态页，`/api` 经 SSH 反向隧道回源；`tunnel` 必填 |
+| `subdomain` | `https://<label>.xknot.si`, hub-issued | the entry hosts the static page, `/api` returns through the SSH reverse tunnel; `tunnel` required |
 
-`mode` 字段保留，取值只有 `subdomain`。探测地址恒为 `url` + `/api/health`。名册 `host` 与清单 `url` 的主机名必须一致，并且都落在 `xknot.si` 下。
+The `mode` field is kept, with the only value `subdomain`. The probe address is always `url` + `/api/health`. The roster `host` and the manifest `url`'s hostname must match, and both fall under `xknot.si`.
 
-已经有自有域名的站点不在这里登记：它自己就是入口，不需要签发、不需要跳转。这类站点进不了清单，也不参与联邦探测。
+A site that already has its own domain is not registered here: it is its own entry, needs no issuance and no redirect. Such sites do not enter the manifest and do not participate in federation probes.
 
-`status: pending` 是收录与验收之间的状态，不是另一种接入形态：条目已在清单里，但不探测、不上门户；`/api/health` 验收通过后改成 `active`。换机器、换 IP 只改 DNS 与入口配置，`url` 不变。
+`status: pending` is the state between listing and acceptance, not another access mode: the entry is already in the manifest but not probed and not on the portal; after `/api/health` passes it becomes `active`. Changing machines or IPs only changes DNS and entry config, not the `url`.
 
-## 5. L2：运行状态
+## 5. L2: runtime status
 
-### 5.1 端点
+### 5.1 Endpoint
 
-| 端点 | 频率 | 缓存 | 内容 |
+| Endpoint | Frequency | Cache | Content |
 |------|------|------|------|
-| `/api/health` | 按需（构建时） | `no-store` | `ok`、`version`、`service`、`instance` |
+| `/api/health` | on demand (build time) | `no-store` | `ok`, `version`, `service`, `instance` |
 
-Knot 实例提供 `GET /api/health`，返回 `{ ok: true, service, version }`。中枢直接使用该端点，实例侧无需改动。Knot 部署层还会附上 `release`、`commit`、`builtAt` 供发布脚本核对版本，中枢不读这几个字段。
+A Knot instance provides `GET /api/health`, returning `{ ok: true, service, version }`. The hub uses this endpoint directly; the instance side needs no change. The Knot deployment layer additionally attaches `release`, `commit`, `builtAt` for publish scripts to check versions; the hub does not read these fields.
 
-接入联邦的实例另带 `instance`（接入件里的 `XKNOT_INSTANCE_ID`），例如 `{ ok: true, service: "knot-backend", version: "0.6.0", instance: "wang" }`。中枢用它核对「这个域名后面是不是清单里的那个实例」；不带这一项的实例照常按 `ok` 判活。
+An instance joining the federation also carries `instance` (the access material's `XKNOT_INSTANCE_ID`), e.g. `{ ok: true, service: "knot-backend", version: "0.7.0", instance: "wang" }`. The hub uses it to verify "is this domain the instance in the manifest"; instances without it are still judged by `ok`.
 
-### 5.2 探测判定
+### 5.2 Probe determination
 
-- 地址恒为 `url` + `/api/health`，由 `ops/probe-target.mjs` 推出；清单 `status: active` 才探，`pending` / `suspended` / `retired` 不探。
-- 方法 `GET`，超时 5 秒，不跟随重定向。
-- 只接受 `https`。非 https 判 `unknown`。
-- 成功：HTTP 200，响应体是 JSON，且 `ok === true`。
-- 带了 `instance` 但与清单 id 不一致：判 `down`，`error` 记 `instance_mismatch`。
-- 不读实例的库，不带 Cookie，不带凭据。
+- The address is always `url` + `/api/health`, derived by `ops/probe-target.mjs`; only `status: active` is probed, `pending` / `suspended` / `retired` are not.
+- Method `GET`, timeout 5 seconds, no redirect following.
+- Only `https` accepted. Non-https is `unknown`.
+- Success: HTTP 200, body is JSON, and `ok === true`.
+- Carrying `instance` that differs from the manifest id: `down`, `error` records `instance_mismatch`.
+- Does not read the instance's database, no Cookie, no credentials.
 
-### 5.3 状态
+### 5.3 Status
 
-| 状态 | 判定 | 展示 |
+| Status | Determination | Display |
 |------|------|------|
-| `up` | 成功且 ≤2 秒 | 绿点 |
-| `degraded` | 成功但 >2 秒 | 黄点 |
-| `down` | 失败 | 红点 |
-| `unknown` | 未探测，或清单 `status` 还是 `pending` | 灰点 |
+| `up` | success and ≤2s | green dot |
+| `degraded` | success but >2s | yellow dot |
+| `down` | failure | red dot |
+| `unknown` | never probed, or the manifest `status` is still `pending` | gray dot |
 
-探测失败保留 `lastOkAt`，只把 `status` 改成 `down`，页面显示「上次正常：3 小时前」。
+A failed probe keeps `lastOkAt`, only changes `status` to `down`, and the page shows "last ok: 3 hours ago".
 
-### 5.4 连续断连
+### 5.4 Consecutive disconnect
 
-`ops/watch-health.mjs` 每 15 分钟跑一次探测，用 `downSince` 与 `notified` 记录连续时长，并按下面的线处理：
+`ops/watch-health.mjs` runs a probe every 15 minutes, records consecutive duration with `downSince` and `notified`, and handles per these lines:
 
-| 条件 | 动作 |
+| Condition | Action |
 |------|------|
-| `down` 连续 24 小时 | 给实例 `contact` 寄提醒 |
-| `down` 连续 7 天 | 寄断连通知，门户不展示该条目（`hiddenAt` / `hiddenReason`） |
-| 任一探测 `up` / `degraded` | 清空 `downSince` 与隐藏标记，条目自动回到门户 |
-| `status` 仍为 `pending` 且 `since` 已 14 天 | 内部提醒运营方 |
-| `status` 仍为 `pending` 且 `since` 已 30 天 | 门户暂时隐藏 |
+| `down` for 24 consecutive hours | mail the instance `contact` a reminder |
+| `down` for 7 consecutive days | send the disconnect notice, the portal no longer shows the entry (`hiddenAt` / `hiddenReason`) |
+| any probe `up` / `degraded` | clear `downSince` and the hide flag, the entry returns to the portal automatically |
+| `status` still `pending` and `since` is 14 days ago | internal reminder to the operator |
+| `status` still `pending` and `since` is 30 days ago | temporarily hidden from the portal |
 
-「从未接通」只看清单状态：`status: pending` 的条目按 `since` 起算，14 天内部提醒、30 天暂时隐藏。已改为 `active` 但探不到的走上面的 `down` 规则，不混用。
+"Never connected" is judged only by the manifest status: `status: pending` entries count from `since`, with a 14-day internal reminder and 30-day temporary hide. Ones already `active` but unreachable follow the `down` rules above, not mixed.
 
-隐藏只影响 `buildHubData` 输出的 `health.hidden`，**不改 `instances.json`**。每条通知在 `notified` 里记一次，重复运行不会重复发信。
+Hiding only affects `health.hidden` in `buildHubData`'s output, and **does not change `instances.json`**. Each notice is recorded once in `notified`; repeated runs do not resend.
 
-### 5.5 结果文件
+### 5.5 Result file
 
-写到 `xknot.si/var/health.json`，门户只读这一份：
+Written to `xknot.si/var/health.json`; the portal reads only this file:
 
 ```json
 {
@@ -245,7 +241,7 @@ Knot 实例提供 `GET /api/health`，返回 `{ ok: true, service, version }`。
       "status": "up",
       "httpStatus": 200,
       "latencyMs": 137,
-      "version": "0.2.0",
+      "version": "0.7.0",
       "lastOkAt": "2026-10-19T02:30:00.000Z",
       "since": "2026-10-19T02:30:00.000Z",
       "checks": 1,
@@ -260,13 +256,13 @@ Knot 实例提供 `GET /api/health`，返回 `{ ok: true, service, version }`。
 }
 ```
 
-- `checks` 和 `ok` 从 `since` 起累计，用于计算可用率。不存逐次历史。
-- 文件是唯一状态，删除后条目回到 `unknown`。
-- 写入方式：临时文件 + rename。
+- `checks` and `ok` accumulate from `since`, used to compute availability. No per-attempt history is kept.
+- The file is the only state; deleting it returns the entry to `unknown`.
+- Write method: temp file + rename.
 
-### 5.6 活动数据
+### 5.6 Activity data
 
-伙伴可选暴露 `statsUrl`，只提供计数。中枢在构建时拉取，写 `var/stats/{id}.json`，门户只读这一份；缺文件显示「未公开」。
+A partner optionally exposes `statsUrl`, providing only counts. The hub fetches at build time, writes `var/stats/{id}.json`; the portal reads only this file; a missing file shows "not shared".
 
 ```json
 {
@@ -277,54 +273,54 @@ Knot 实例提供 `GET /api/health`，返回 `{ ok: true, service, version }`。
 }
 ```
 
-- 只有计数，没有昵称、邮箱、头像、正文和记录 id。
-- 缺 `statsUrl` 显示「未公开」，不显示 0。
-- 自报数字只做展示，不参与排序、评级或分成。
-- 只收窗口值，不收日序列。
+- Only counts, no nicknames, emails, avatars, bodies, or record ids.
+- Missing `statsUrl` shows "not shared", not 0.
+- Self-reported numbers are display-only, not for sorting, rating, or revenue sharing.
+- Only window values are accepted, not daily series.
 
-字段约束：
+Field constraints:
 
-| 字段 | 约束 |
+| Field | Constraint |
 |------|------|
-| `generatedAt` | 可空，ISO 时间；作为「伙伴更新于」 |
-| `posts.total` / `posts.last24h` / `posts.last7d` | 可空，非负整数 |
-| `accounts.total` / `accounts.last7d` | 可空，非负整数 |
-| `authors.active7d` | 可空，非负整数 |
-| 未知字段 | 忽略，不进 `hub.json` |
+| `generatedAt` | nullable, ISO time; used as "partner updated at" |
+| `posts.total` / `posts.last24h` / `posts.last7d` | nullable, non-negative integer |
+| `accounts.total` / `accounts.last7d` | nullable, non-negative integer |
+| `authors.active7d` | nullable, non-negative integer |
+| Unknown fields | ignored, not entering `hub.json` |
 
-至少给一个认识的计数，否则整份作废。拉取由 `ops/fetch-stats.mjs` 执行：只允许 `https`，不跟随重定向，超时 5 秒，响应体上限 32KB，解析 DNS 后拒绝回环、私有网段和云元数据地址；失败时保留上一份。支持 `ETag` / `If-None-Match`。
+At least one recognized count, otherwise the whole thing is discarded. The fetch is done by `ops/fetch-stats.mjs`: https only, no redirects, 5s timeout, 32KB body cap, rejecting loopback, private ranges, and cloud-metadata after DNS resolution; failure keeps the previous copy. Supports `ETag` / `If-None-Match`.
 
-### 5.7 入口流量（中枢观测，不属契约）
+### 5.7 Entry traffic (hub observation, not part of the contract)
 
-中枢在入口 nginx 的访问日志里看到每个子域的请求与字节，聚合成 `var/traffic/{id}.json`。这一项**不需要实例配合，也不进任何接口**：
+The hub sees each subdomain's requests and bytes in the entry nginx access log, aggregating into `var/traffic/{id}.json`. This item **needs no instance cooperation and enters no endpoint**:
 
-- 实例不报数、不埋点，接入件与 `/api/*` 都不变。
-- 只给中枢控制台看，不写 `hub.json`、不进成员入口。对外公开某个站点的流量要主理人另行同意。
-- 中枢与入口不同机时这一项整段不生效，其余契约照旧。
+- The instance reports nothing and does no instrumentation; the access material and `/api/*` are unchanged.
+- Only shown in the hub console; not written into `hub.json`, not in the member entry. Publishing a site's traffic outward needs the owner's separate consent.
+- When the hub and entry are on different machines, this whole item does not apply; the rest of the contract is unchanged.
 
-字段、保留期与盲区见 [HUB.md](HUB.md) 第 11 节。
+Fields, retention, and blind spots in [HUB.md](HUB.md) section 11.
 
-## 6. L3：热点橱窗
-伙伴登记一个 URL（`cardsUrl`），内容发布在自己的站点，中枢在构建时取回。
+## 6. L3: showcase
+A partner registers a URL (`cardsUrl`), content is published on their own site, and the hub fetches at build time.
 
-### 6.1 定位
+### 6.1 Positioning
 
-| 橱窗 | 信息流 |
+| Showcase | Feed |
 |------|--------|
-| 固定 6 张，全量替换 | 无限下拉 |
-| 伙伴自己挑 | 平台按算法排 |
-| 只能跳回原站 | 可在中枢读完 |
-| 过期就隐藏 | 永久沉淀 |
-| 中枢免审，整组可下架 | 中枢承担内容责任 |
+| fixed 6 cards, full replacement | infinite scroll |
+| the partner picks | the platform ranks by algorithm |
+| can only link back to the origin | can be read in full on the hub |
+| hides when stale | permanently accumulated |
+| the hub does not review; the whole group can be delisted | the hub bears content responsibility |
 
-### 6.2 拉取
+### 6.2 Fetch
 
 ```
 GET https://travel.xknot.si/.well-known/knot-cards.json
 Accept: application/json
 ```
 
-响应体是固定封装。中枢取到即覆盖上一份，取不到保留上一份。实现是 `ops/fetch-cards.mjs`，落盘为 `var/cards/{id}.json`。
+The response body is a fixed wrapper. The hub overwrites the previous copy on fetch and keeps it on failure. Implementation is `ops/fetch-cards.mjs`, landing in `var/cards/{id}.json`.
 
 ```json
 {
@@ -353,122 +349,143 @@ Accept: application/json
 }
 ```
 
-### 6.3 约束
+### 6.3 Constraints
 
-| 项 | 约束 |
+| Item | Constraint |
 |----|------|
-| `cards` | 0–6 条。`[]` 表示清空；每次拉取全量覆盖，不追加 |
-| `formatVersion` | 整数，当前只认 `1`；与实例版本解耦 |
-| `id` | 实例内唯一，≤64 字符 |
-| `lang` | 可空，BCP 47，卡片自身语言；省略时不标注 |
-| `title` | 必填，≤80 字 |
-| `url` | 必填，https，指向该实例自己的主机 |
-| `summary` | 可空，≤160 字 |
-| `body` | 可空，≤4000 字符，MD 子集：标题、列表、链接、引用、粗体、代码。禁 HTML、脚本、`javascript:` 与 `data:` |
-| `images` | 可空，≤3 张。https 绝对地址，主机与 `url` 相同或为其子域 |
-| `images[].width` / `height` | 必填，正整数 |
-| `publishedAt` | 可空，ISO 时间 |
-| `tags` | 可空，≤5 个短词 |
-| 响应体 | ≤256KB |
-| 拉取时机 | 构建时一次。支持 `ETag` / `If-None-Match` |
-| 清空 | 发布 `{"formatVersion":1,"cards":[]}`，下一次构建即清空 |
+| `cards` | 0–6. `[]` means clear; each fetch fully overwrites, no append |
+| `formatVersion` | integer, only `1` recognized for now; decoupled from the instance version |
+| `id` | unique within the instance, ≤64 chars |
+| `lang` | nullable, BCP 47, the card's own language; omitted means unmarked |
+| `title` | required, ≤80 chars |
+| `url` | required, https, pointing to that instance's own host |
+| `summary` | nullable, ≤160 chars |
+| `body` | nullable, ≤4000 chars, an MD subset: headings, lists, links, quotes, bold, code. No HTML, scripts, `javascript:`, or `data:` |
+| `images` | nullable, ≤3. https absolute addresses, host same as or a subdomain of `url` |
+| `images[].width` / `height` | required, positive integers |
+| `publishedAt` | nullable, ISO time |
+| `tags` | nullable, ≤5 short words |
+| Response body | ≤256KB |
+| Fetch timing | once at build time. Supports `ETag` / `If-None-Match` |
+| Clear | publish `{"formatVersion":1,"cards":[]}`, cleared at the next build |
 
-最小可用的一条只有 `title` 和 `url`。伙伴不维护封装时，可以只给一个指向自己热点列表页的地址，中枢按一条外链渲染。
+A minimal valid entry only needs `title` and `url`. A partner that does not maintain the wrapper can give an address pointing to their own hot-list page, and the hub renders it as one external link.
 
-不合格的卡片逐条丢掉，全部不合格时整份作废、保留上一份。HTML 标签在落盘前被剥掉，
-正文不进门户，页面只渲染标题、摘要、语言与跳转地址。
+Unqualified cards are dropped one by one; if all are unqualified the whole thing is discarded and the previous copy kept. HTML tags are stripped before landing on disk; the body does not enter the portal, which renders only title, summary, language, and the link.
 
-`cardsUrl` 与 `statsUrl` 是公开只读地址。中枢不带凭据，需要私密数据时不接入。
+`cardsUrl` and `statsUrl` are public read-only addresses. The hub carries no credentials; private data is not connected.
 
-### 6.4 图片热链
+### 6.4 Image hotlinks
 
-中枢不存图片，只存 URL：
+The hub stores no images, only URLs:
 
-- 节省存储、带宽，避免镜像版权风险。
-- 伙伴不可达时显示占位块，不撑破布局。
-- 中枢保留整组下架开关。
+- saves storage and bandwidth, avoids mirrored-copyright risk.
+- when the partner is unreachable, show a placeholder block without breaking the layout.
+- the hub keeps a whole-group delist switch.
 
-整组下架是 L3 的治理手段：中枢不逐条审核，出现问题时整组移除。
+Whole-group delisting is L3's governance mechanism: the hub does not review item by item, and removes the whole group when problems appear.
 
-### 6.5 缓存与失效
+### 6.5 Cache and invalidation
 
-- 取到即原子覆盖 `var/cards/{id}.json`，取不到保留上一份。
-- 页面显示「更新于 X」。
-- 超过 7 天标灰，超过 30 天整组隐藏。读取时判断，不设定时清理。
-- 中枢不存历史版本和图片。
-- 伙伴改写后，下一次构建同步；整组下架时直接删除文件。
+- On fetch, atomically overwrite `var/cards/{id}.json`; keep the previous copy on failure.
+- The page shows "updated X".
+- Over 7 days grayed; over 30 days the whole group hidden. Judged on read, no scheduled cleanup.
+- The hub stores no historical versions or images.
+- After the partner revises, the next build syncs; whole-group delist deletes the file directly.
 
-### 6.6 安全
+### 6.6 Security
 
-拉取地址来自仓库清单，仍按不可信地址处理：
+Fetch addresses come from the repo manifest but are still treated as untrusted:
 
-- 只允许 `https`，禁止 URL 中的用户名和密码。
-- 不跟随重定向，超时 5 秒，响应体上限 256KB。
-- 解析 DNS 后拒绝回环、私有网段、链路本地和云元数据地址。清单由 worker 写入，运行时仍执行同一套检查。
-- 不带 Cookie 和凭据。
-- 落盘前做白名单清洗：剥掉 HTML 标签，丢弃危险协议，`body` 只渲染 MD 子集。
-- 拉取在构建步骤内运行，失败时保留上一次的 `var/cards/`。
+- https only, no URL username/password.
+- No redirects, 5s timeout, 256KB body cap.
+- After DNS resolution, reject loopback, private ranges, link-local, and cloud-metadata. The manifest is written by the worker, but the same checks run at runtime.
+- No Cookie or credentials.
+- Whitelist cleaning before landing: strip HTML tags, drop dangerous protocols, `body` renders only the MD subset.
+- The fetch runs inside the build step; on failure the previous `var/cards/` is kept.
 
-## 7. 委托发信
+## 7. Mail relay
 
-联邦里只有一张通过验证的发信地址。实例量小、域名新，自己配 SMTP 容易进垃圾箱；
-可以把通知信交给中枢代发。这是三层信息之外唯一的一项服务，也是中枢唯一的写入口。
+The federation has only one verified sending address. Instances are small and their domains new, so self-configured SMTP tends to land in spam; a notification can be handed to the hub for delivery. This is the only service outside the three information layers, and the hub's only write entry.
 
-它**不写中枢的数据**：不改清单、不写快照、不存正文，只在 `relay_log` 里记一条不含地址与正文的记录。
+**On by default.** The credential is issued by the operator when generating the access material, and handed to the instance together with it; the instance uses it to send, with no SMTP of its own and no separate application. The hub keeps a per-instance switch and can suspend or resume acceptance at any time (section 7.2).
 
-### 7.1 为什么由中枢发
+It **does not write the hub's manifest or snapshot**: no change to `instances.json`, no snapshot write, no body kept, only one record in `relay_log` with no address and no body.
 
-- 发信信誉按域名累积。分散到每个实例，等于每家都从零开始。
-- 收信方只看发信域。一张已验证地址比十张新地址更容易送达。
-- 实例不必持有 SMTP 口令，也不必在防火墙上开 465 / 587。
+### 7.1 Why the hub sends
 
-代价是收件人看到的发信人是中枢的地址，回信要靠 `Reply-To` 回到实例。
+- Sending reputation accumulates per domain. Spreading it across instances means every one starts from zero.
+- Recipients only look at the sending domain. One verified address delivers better than ten new ones.
+- The instance need not hold SMTP credentials, nor open 465 / 587 on its firewall.
 
-### 7.2 凭据
+The cost is that recipients see the hub's address as the sender, and replies rely on `Reply-To` going back to the instance.
 
-- 一份凭据绑定一个实例；`relay_tokens` 只存令牌的 SHA-256。
-- 明文只在签发时打印一次，写进实例的环境变量。
-- 吊销可以按凭据 id，也可以按实例 id 一次吊销该实例的全部凭据。
-- 实例必须仍在清单里且 `status: active`；下架或暂停后凭据自动失效。
-- 每份凭据有自己的 24 小时额度，默认 50 封，上限受中枢配置约束。
+### 7.2 Credentials and switches
 
-签发、查看与吊销：
+- One credential binds to one instance; `relay_tokens` stores only the token's SHA-256.
+- The plaintext prints once at issuance, written into the instance's env vars.
+- Revocation can be by credential id, or by instance id revoking all of that instance's credentials at once.
+- The instance must still be in the manifest with `status: active`; a delisted or non-active instance's requests are rejected.
+- Each credential has its own 24-hour quota, default 50, capped by hub config.
+
+**Three switches, expressing three different things.**
+
+| Switch | Scope | How to use | Instance sees | Reversible |
+|------|------|--------|----------|------|
+| the `/admin` "mail master switch" | all hub mail | click in the console, persisted, effective immediately | relay `503 relay_unavailable` | click again to restore |
+| `XKNOT_RELAY_ENABLED=0` | all hub instances | hub env var; one-click stop in an incident | `503 relay_unavailable` | set back to restore |
+| `relay-disable <instance>` | one instance | operator command; records the reason | `403 relay_disabled` | `relay-enable` restores, credential untouched |
+| `relay-revoke` | one instance | credential leak, leaving the federation | `401 token_revoked` | **irreversible**, reissue and have the instance swap the file |
+
+The console master switch governs **whether the whole hub sends at all**: partner mail, internal alerts, member login codes, and relay stop together. It writes into the `settings` table (`mail=off`), not config, not env vars, no restart; deleting that row returns to default. The env var `XKNOT_RELAY_ENABLED=0` is a different, relay-only gate: it does not lock the console; when the master switch is on, the panel notes "relay still returns 503", the two stating their own facts without impersonating each other.
+
+Suspend and revoke are two things: **suspend only stops acceptance** — credential, quota, and history stay as-is, and enabling continues use; **revoke invalidates that key** — the instance must get a new access material to send again. Day-to-day rate limiting and rising bounce rates use suspend; a credential leak uses revoke. When the master switch is off, `admin-cli notify / handoff / live` also refuse directly, avoiding "stopped in the UI but still sent one from the terminal".
 
 ```bash
 cd xknot.si
-node server/admin-cli.mjs relay-token wang --label "登录提醒" --daily 50
+node server/admin-cli.mjs relay-disable cpswang --note "rising bounce rate"
+node server/admin-cli.mjs relay-enable cpswang
+```
+
+**Whether to use relay is the instance's own choice**: with `XKNOT_HUB_ORIGIN` and `XKNOT_HUB_RELAY_TOKEN` in its environment it hands to the hub, otherwise it uses its own SMTP. The hub does not notify in advance; it only rejects per the table above when a request arrives.
+
+**One tradeoff you must know.** The instance puts relay ahead of local SMTP, and that choice is fixed at process start: once it holds a credential, the hub is used first. When the hub is stopped, an instance that also has a usable SMTP (host and sender address both set) falls back to sending locally; an instance with only relay configured just reports a sending failure, so **for that instance suspending means its login keys cannot be delivered** (XKnot login has only the email-verification-code path). Operationally there are only two paths: either confirm the instance has its own SMTP before stopping, or accept that it temporarily cannot log in.
+
+Issue, view, and revoke:
+
+```bash
+cd xknot.si
+node server/admin-cli.mjs relay-token wang --label "login reminder" --daily 50
 node server/admin-cli.mjs relay-tokens
 node server/admin-cli.mjs relay-revoke wang
 node server/admin-cli.mjs relay-log 50
 ```
 
-实例侧只配两项：中枢地址与凭据。发信地址是协议常量，由中枢地址推导
-（`<XKNOT_HUB_ORIGIN>/api/federation/mail`），不需要另填；只有换入口时才写 `XKNOT_HUB_RELAY_URL`。
+The instance side configures only two things: hub address and credential. The send address is a protocol constant, derived from the hub address (`<XKNOT_HUB_ORIGIN>/api/federation/mail`), no extra field; only when changing the entry do you write `XKNOT_HUB_RELAY_URL`.
 
 ```bash
 XKNOT_HUB_ORIGIN=https://xknot.si
 XKNOT_HUB_RELAY_TOKEN=xkr_wang_...
 ```
 
-**一处必须知道的取舍。** 实例把委托发信排在本地 SMTP 之前：手里有凭据就先走中枢。
-中枢停掉以后，自己另配了可用 SMTP（主机与发信地址齐全）的实例会退回本机发信；只配了委托发信的实例
-则只会报发信失败，对它来说暂停等于登录密钥寄不出去（XKnot 的登录只有邮箱密钥一条路）。
-运营上要么确认该实例自己有 SMTP 再停，要么接受它暂时不能登录。
-
-这两项和实例 id 一起构成**接入件**，格式见第 7.4 节。一次生成整份：
+These two govern only mail relay; the **access material** also carries the instance id, the hub address, and the four issued fields — the full key table is in section 7.4. Generate the whole thing at once:
 
 ```bash
-node server/admin-cli.mjs access <申请编号> --id wang --out /tmp/wang-access.env
+node server/admin-cli.mjs access <application id> --id wang --out /tmp/wang-access.env
 ```
 
-### 7.3 接口
+`access` issues one relay credential by default and writes it into the access material; add `--no-relay` only when a pure-SMTP access material is genuinely wanted.
 
-| 方法与路径 | 鉴权 | 说明 |
+### 7.3 Endpoints
+
+| Method and path | Auth | Notes |
 |------------|------|------|
-| `POST /api/federation/mail` | `Authorization: Bearer <token>` | 送一封纯文本通知 |
-| `GET /api/federation/mail` | 同上 | 查 24 小时额度 |
+| `POST /api/federation/mail` | `Authorization: Bearer <token>` | send one plain-text notification |
+| `GET /api/federation/mail` | same | query the 24-hour quota |
 
-请求体：
+Only these two. Credential issuance and suspension are all on the hub command line, not open to the case key or web sessions.
+
+Request body:
 
 ```json
 {
@@ -480,23 +497,23 @@ node server/admin-cli.mjs access <申请编号> --id wang --out /tmp/wang-access
 }
 ```
 
-| 字段 | 约束 |
+| Field | Constraint |
 |------|------|
-| `to` | 必填。单个裸地址，不带显示名，≤254 字符 |
-| `subject` | 必填，≤120 字，不允许换行 |
-| `text` | 必填，纯文本，≤4000 字，不允许 `\r` 与 NUL |
-| `replyTo` | 可空。必须落在实例自己的域名（`url` 或 `contact` 的主机及其子域）；空时用 `contact` |
-| `idempotencyKey` | 可空，≤64 位 `A-Za-z0-9._:-`；24 小时内同键只发一次 |
+| `to` | required. A single bare address, no display name, ≤254 chars |
+| `subject` | required, ≤120 chars, no newlines |
+| `text` | required, plain text, ≤4000 chars, no `\r` or NUL |
+| `replyTo` | nullable. Must fall within the instance's own domain (`url` or `contact`'s host and subdomains); when empty, `contact` is used |
+| `idempotencyKey` | nullable, ≤64 `A-Za-z0-9._:-`; the same key sends once within 24 hours |
 
-成功：
+Success:
 
 ```json
 { "ok": true, "delivery": { "id": 42, "at": "2026-10-19T02:31:00.000Z", "toDomain": "example.com" } }
 ```
 
-同一个幂等键重试时返回 `{"ok":true,"duplicate":true,...}`，不会再寄一次。若第一次请求仍在发信途中，重试会带 `"pending": true`；额度已先占用，等原请求结束后再查额度即可。
+Retrying the same idempotency key returns `{"ok":true,"duplicate":true,...}` without resending. If the first request is still in transit, the retry carries `"pending": true`; the quota is already occupied, so query it again after the original finishes.
 
-额度查询：
+Quota query:
 
 ```json
 {
@@ -506,138 +523,127 @@ node server/admin-cli.mjs access <申请编号> --id wang --out /tmp/wang-access
 }
 ```
 
-错误码：
+Error codes:
 
-| 状态 | `error` | 含义 |
+| Status | `error` | Meaning |
 |------|---------|------|
-| 400 | `invalid` | 字段错误，`fields` 给出字段码 |
-| 400 | `bad_json` | 请求体不是 JSON |
-| 401 | `missing_token` / `invalid_token` / `token_revoked` | 凭据缺失、无效或已吊销 |
-| 403 | `instance_not_listed` / `instance_inactive` | 实例不在清单里，或状态不是 `active` |
-| 413 | `too_large` | 请求体超过 16KB |
-| 429 | `rate_limited` | 单凭据每分钟 6 封，或全站每小时 240 封 |
-| 429 | `quota_exceeded` | 24 小时额度用完 |
-| 502 | `smtp_failed` | 中枢的 SMTP 拒绝了这次投递；见下面两类 |
-| 503 | `relay_unavailable` | 中枢没有配 SMTP，或关掉了委托发信 |
+| 400 | `invalid` | field error, `fields` gives the field codes |
+| 400 | `bad_json` | body is not JSON |
+| 401 | `missing_token` / `invalid_token` / `token_revoked` | credential missing, invalid, or revoked |
+| 403 | `instance_not_listed` / `instance_inactive` | instance not in the manifest, or status is not `active` |
+| 403 | `relay_disabled` | this instance's relay is suspended; the credential is still valid and works after restore |
+| 413 | `too_large` | body over 16KB |
+| 429 | `rate_limited` | 6 per minute per credential, or 240 per hour site-wide |
+| 429 | `quota_exceeded` | the 24-hour quota is used up |
+| 502 | `smtp_failed` | the hub's SMTP refused this delivery; see the two classes below |
+| 503 | `relay_unavailable` | the hub has no SMTP, or the `/admin` master switch or `XKNOT_RELAY_ENABLED=0` is off |
 
-`502 smtp_failed` 的正文带 `smtp`，是收信端给的数字码加增强状态码，例如 `"smtp": "421 4.7.28"`。
-它分两类，实例的处置完全不同：
+`502 smtp_failed` carries `smtp`, the receiver's numeric code plus enhanced status code, e.g. `"smtp": "421 4.7.28"`. It falls into two classes, and the instance's handling is entirely different:
 
-| 类型 | 判据 | 正文 | 该怎么办 |
-|------|------|------|----------|
-| 瞬时 | SMTP `4xx`、超时、连接被掐 | `"transient": true`，并带 `Retry-After` | 等 `Retry-After` 秒再用**同一个幂等键**重试；立刻重试只会让收信端的流控续上 |
-| 永久 | SMTP `5xx`、地址不合法、内容被拒 | 没有 `transient` | 不要重试同一封信；换收件地址或改内容，否则每次都会被同一句话拒绝 |
+| Class | How to tell | Body | What to do |
+|------|---------|------|----------|
+| transient | SMTP `4xx`, timeout, connection dropped | `"transient": true`, with `Retry-After` | wait `Retry-After` seconds, then retry with **the same idempotency key**; retrying at once only extends the receiver's throttle |
+| permanent | SMTP `5xx`, illegal address, content refused | no `transient` | do not retry the same message; change the recipient or the content, or the same sentence rejects it every time |
 
-收信端说「我们这边慢一点」时给的就是 4xx，典型是共享发信 IP 被流控：
+When the receiver says "slow down on our side" it gives a 4xx, typically a shared sending IP being throttled:
 
 ```json
 { "error": "smtp_failed", "transient": true, "smtp": "421 4.7.28" }
 ```
 
-失败也会占掉当次额度（`failed` 计入 24 小时用量），所以反复重试同一个被拒的地址会更快撞上 `quota_exceeded`。
+A failure also consumes that call's quota (`failed` counts toward the 24-hour usage), so repeatedly retrying one rejected address hits `quota_exceeded` sooner.
 
-### 7.4 接入件
+### 7.4 Access material
 
-接入件是中枢交给实例的唯一一份凭证文件：**env 格式，键名固定，值只有中枢能签**。
-它是契约，不是某个实现的配置模板——实例存成什么文件名、放哪个目录、用什么工具读，
-都由实例自己决定；中枢只规定键名和语义（`knot-platform` 的约定是 `sites/<站点>/xknot.env`）。
+The access material is the only credential file the hub hands to the instance: **env format, with these keys, values only the hub can sign**. It is a contract, not an implementation's config template — what filename the instance stores it under, which directory, and what tool reads it are all the instance's own decision; the hub only fixes the key names and semantics (`knot-platform`'s convention is `sites/<site>/xknot.env`).
 
-| 键 | 必填 | 语义 |
+| Key | Required | Semantics |
 |----|------|------|
-| `XKNOT_INSTANCE_ID` | 是 | 清单里的实例 id，小写字母/数字/短横线 |
-| `XKNOT_ISSUED_URL` | 是 | 清单里的 `url` |
-| `XKNOT_ISSUED_AT` | 是 | 清单里的 `since`，`YYYY-MM-DD` |
-| `XKNOT_ISSUED_TIER` | 是 | 清单里的 `tier`，照抄不改写 |
-| `XKNOT_ISSUED_STATUS` | 是 | 清单里的 `status`，照抄不改写 |
-| `XKNOT_HUB_ORIGIN` | 是 | 中枢地址，如 `https://xknot.si` |
-| `XKNOT_HUB_RELAY_URL` | 否 | 委托发信地址；留空按中枢地址推导，只有换入口时才写 |
-| `XKNOT_HUB_RELAY_TOKEN` | 否 | 委托发信凭据；不签发委托发信时没有这一项 |
+| `XKNOT_INSTANCE_ID` | yes | the instance id in the manifest, lowercase letters/digits/hyphens |
+| `XKNOT_HUB_ORIGIN` | yes | the hub address, e.g. `https://xknot.si` |
+| `XKNOT_ISSUED_URL` | yes | the manifest's `url` |
+| `XKNOT_ISSUED_AT` | yes | the manifest's `since`, `YYYY-MM-DD` |
+| `XKNOT_ISSUED_TIER` | yes | the manifest's `tier`, copied verbatim |
+| `XKNOT_ISSUED_STATUS` | yes | the manifest's `status`, copied verbatim |
+| `XKNOT_HUB_RELAY_TOKEN` | no | the relay credential; issued by default, absent when generated with `--no-relay` |
+| `XKNOT_HUB_RELAY_URL` | no | the relay address, not issued by the hub: derived from `XKNOT_HUB_ORIGIN` by default, the instance adds it only when changing the entry |
 
-规则：
+The four `XKNOT_ISSUED_*` keys are a mirror, not a snapshot: the next connect check (the `/admin` sync) or a re-run of `join` rewrites them from the manifest's current issued zone.
 
-- **一个事实一个键。** 签发区五项与清单字段一一对应，没有同义键，没有第二个日期键。
-- **只读。** 实例侧保存并转述这五项；不解释取值，不补默认值。档位与状态的词表属于中枢，实例侧不持有副本——一份不属于自己的词表，无论加宽还是收窄都会在下次中枢调整时把实例挡在启动之外。取到不认识的取值时照原样保存、照原样报回。
-- **空值有意义。** 键在而值为空，表示中枢尚未告知这一项，实例按「未告知」显示，不填一个看起来合理的默认值。
-- **是镜像，不是快照。** 它不是「签发那一刻拍下来就不再变」的东西：实例在下一次接通检查（`/admin` 的同步）或重跑 `join` 时，按清单当前的签发区改写这几项。它仍是中枢的记录，不是实例的。
-- 生成：`node server/admin-cli.mjs access <申请编号> --id <instance> [--no-relay] --out <文件>`，
-  只发给已通过的申请。委托发信凭据默认签发，确实要一份纯 SMTP 的接入件时才加 `--no-relay`。
-- 写入：实例用既有的接入件写入路径落盘（`knot-platform` 是 `./ops/scripts/join-xknot.sh --payload <文件>`），
-  然后重启 Backend 让它生效。
-- 传输：一次性领取，`0600`，不进聊天、不进邮件正文、不进版本库。
-- 存放：实例自己保存；不接入联邦的实例不需要这份文件，功能照常。
-- 范围：**只含接入**。域名、端口、入口主机、隧道账号、静态文件归属属于部署拓扑，
-  由实例的部署方案自己记录，中枢不签发、不校验。
-- 失配：凭据跟着签发走。重领一份新件时，旧的发信地址与凭据一起作废，不要拼成一对。
-- 重领：接入件里出现当前契约之外的键（改名前或已废弃的键）时，实例整份拒绝、原文件不动。
-  接收方不做键名转换，也不把这样的键当普通未知项放过去：写进去没有任何一方会读，
-  等到门户上少一行档位才发现。要新键，让中枢用当前版本重签一份。
+Rules:
 
-实例用 `XKNOT_INSTANCE_ID` 在 `/api/health` 里报出 `instance`，中枢核对它是否等于清单里的 id，
-不一致判 `down`（见第 5 节）。
+- Generation: `node server/admin-cli.mjs access <application id> --id <instance> [--no-relay] --out <file>`, issued only to approved applications; carries one relay credential by default.
+- Writing: the instance persists it along its existing access-material write path (`knot-platform` is `join-xknot.sh --payload`), then restarts the Backend to apply.
+- Transfer: one-time claim, `0600`, not in chat, not in mail bodies, not in version control.
+- Storage: the instance keeps it itself; an instance not joining the federation does not need this file and works as usual.
+- Scope: **access only**. Domain, port, entry host, tunnel account, and static-file ownership are deployment topology, recorded by the instance's own deployment plan; the hub does not issue or validate them.
+- Reissue: re-signing for the same instance revokes its old relay credential (there is no separate reclaim besides `relay-revoke`, so do not keep old files); hub address and site address are unchanged, other keys are rewritten per the current manifest.
+- Mismatch: the instance uses only its latest file; combining two files sends with the old credential and the hub rejects as `token_revoked`.
+- Retired keys: a key outside the current contract (renamed or dropped) makes the instance reject the whole file and leave the existing one untouched. The receiver does not rename keys or wave such a key through as an ordinary unknown: writing it in means nobody reads it, and the missing tier row is only noticed later on the portal. A new key has to come from a re-sign by the hub on the current version.
 
-### 7.5 边界
+The instance reports `instance` in `/api/health` using `XKNOT_INSTANCE_ID`; the hub verifies it equals the manifest id, and a mismatch is `down` (section 5).
 
-- 只发纯文本：不收 HTML、附件、多收件人、抄送与密送。
-- 发信人恒为中枢配置的 `MAIL_FROM`，实例不能覆盖；`Reply-To` 必须落在实例自己的域名。
-- 不存正文、完整收件地址与主题；日志只留实例、收件域名、地址哈希、主题长度和结果。
-- 每次发信额外带 `X-XKnot-Instance: <id>`，便于收信方与中枢对账。
-- 中枢不替实例重试委托发信：`4xx` 立刻回 502 加 `Retry-After`，由实例按那个间隔自己重发；
-  `5xx` 也回 502 但不给 `Retry-After`，因为同一封信再发一次会被同一句话拒掉。
-  中枢自己发出的申请与上线通知才在内部按 1 / 5 / 30 分钟退避重试。
-- 中枢只看得见 SMTP 会话里的结果。收信端先收下 `250`、之后再退信的（异步退信）它看不到，
-  也不做退信处理，也不代管订阅；退信率和投诉率由实例自己控制。
-- 中枢可以随时吊销凭据；吊销不影响实例的其他功能。
+### 7.5 Boundary
 
-### 7.6 滥用与处置
+- Plain text only: no HTML, attachments, multiple recipients, cc, or bcc.
+- Sender is always the hub's `MAIL_FROM`, the instance cannot override; `Reply-To` must fall within the instance's own domain.
+- No body, full recipient address, or subject is kept; the log only keeps instance, recipient domain, address hash, subject length, and result.
+- Each send carries `X-XKnot-Instance: <id>` for recipient-side reconciliation with the hub.
+- The hub does not retry relayed mail on the instance's behalf: a `4xx` answers 502 with `Retry-After` immediately and the instance resends after that interval; a `5xx` also answers 502 but without `Retry-After`, because the same message would be refused by the same sentence. Only the hub's own application and live notices retry internally, at 1 / 5 / 30 minutes.
+- The hub sees only the result inside the SMTP session. When the receiver accepts `250` and bounces later (asynchronous bounce) the hub cannot see it, does no bounce handling, and does not host subscriptions; bounce and complaint rates are the instance's own to control.
+- The hub can suspend or revoke the credential at any time; neither affects the instance's other features, only mail is rejected.
 
-| 现象 | 动作 |
+### 7.6 Abuse and handling
+
+| Symptom | Action |
 |------|------|
-| 单个实例退信率升高 | 调低该凭据的 `--daily`，或 `relay-revoke <instance>` |
-| 收到垃圾邮件投诉 | 立即吊销，从清单下架，并删除 L3 缓存 |
-| 收件人回复无人处理 | 检查实例的 `contact` 与 `replyTo`，回信应落到实例自己的信箱 |
+| a single instance's bounce rate rises | `relay-disable <instance>` to stop it first (recoverable); then decide between lowering `--daily` and revoking |
+| a spam complaint arrives | immediately `relay-disable`, then `relay-revoke` and delist; also delete the L3 cache |
+| credential leak | `relay-revoke` (irreversible), re-`access` and have the instance swap the file |
+| replies to recipients go unanswered | check the instance's `contact` and `replyTo`; replies should land in the instance's own mailbox |
 
-`relay_log` 默认保留 30 天：启动时清理一次，之后每 6 小时清理更早的记录；`pending` 每分钟检查一次，超过 15 分钟仍是 `pending` 的占位视为进程在发信途中退出，直接回收，不再占用额度，也不会一直挡住同一个幂等键。
+`relay_log` keeps 30 days by default: cleaned once at startup, then every 6 hours for older records; `pending` is checked every minute, and a placeholder still `pending` after 15 minutes is treated as the process exiting mid-send, reclaimed directly — no longer occupying quota, and not blocking the same idempotency key forever.
 
-## 8. 安全与隐私
+## 8. Security and privacy
 
-- 中枢只访问清单中的地址。加入申请只收子域标签与站点信息，接收时不解析、不抓取；只有申请通过、写进清单并验收之后，构建时才探测。
-- 探测与拉取在解析 DNS 后拒绝回环、私有网段、链路本地和云元数据地址。
-- 写入路径只有两条：`POST /api/applications`（只收表单字段，不存文件，不回显 HTML，字段有长度上限与蜜罐）和 `POST /api/federation/mail`（Bearer 凭据、纯文本、独立额度、不留正文）。
-- 委托发信与浏览器会话完全隔离：不读 Cookie，不接受 `Origin` 跨站的 POST 复用会话。
-- 控制台需要管理员账号和会话；账号由命令行建立，口令用 scrypt 加盐存储，会话 Cookie 为 `HttpOnly`、`SameSite=Strict`。
-- 门户不执行伙伴脚本，不嵌 iframe。外链带 `rel="noopener noreferrer"`。
-- 中枢不保存用户表、作者目录和个体访问画像；申请记录只存站点信息、联系邮箱和哈希后的来源地址；发信记录只存收件域名与地址哈希。
-- `.si` 在欧盟境内。M2 上线前完成一次 GDPR 评估，重点检查自报计数能否反推个体，以及发信日志的最小化。
+- The hub only accesses manifest addresses. The join application only receives the subdomain label and site info, not resolved or fetched on receipt; only after approval, manifest listing, and acceptance does the build probe.
+- Probes and fetches reject loopback, private ranges, link-local, and cloud-metadata after DNS resolution.
+- There are only two write paths: `POST /api/applications` (form fields only, no file storage, no HTML echo, length caps and a honeypot) and `POST /api/federation/mail` (Bearer credential, plain text, its own quota, no body). Credential issuance, suspension, and revocation are all on the hub command line, with no HTTP entry.
+- Mail relay is fully isolated from browser sessions: reads no Cookie, and does not accept cross-origin POSTs reusing a session via `Origin`.
+- The console needs an admin account and session; accounts are created by command line, passwords stored with scrypt+salt, and the session Cookie is `HttpOnly`, `SameSite=Strict`.
+- The portal executes no partner scripts and embeds no iframes. External links carry `rel="noopener noreferrer"`.
+- The hub keeps no user table, author directory, or individual visit profile; application records keep only site info, contact email, and a hashed source address; mail records keep only recipient domain and address hash.
+- `.si` is inside the EU. A GDPR assessment is completed before M2 goes live, focusing on whether self-reported counts can reverse-identify individuals and on mail-log minimization.
 
-## 9. 归属与许可
+## 9. Ownership and license
 
-- 代码以 Apache-2.0 发布，版权人 PaulWang，署名见 `NOTICE`。
-- `xknot.si` 及其下签发的子域归 PaulWang 所有，不随代码授权。
-- 许可证不授予商标使用权。`Knot`、`xknot`、`xknot.si` 的名称和标识归 PaulWang 所有。
-- 收录不改变归属。伙伴的站点、内容和用户属于伙伴。
+- The code is released under Apache-2.0, copyright PaulWang, attribution in `NOTICE`.
+- `xknot.si` and the subdomains issued under it belong to PaulWang and are not licensed with the code.
+- The license grants no trademark rights. The names and marks `Knot`, `xknot`, `xknot.si` belong to PaulWang.
+- Listing does not change ownership. A partner's site, content, and users belong to the partner.
 
-## 10. 收录与下架
+## 10. Listing and delisting
 
-加入是申请制：主理人在自己站点的 `/admin` 里提交，平台当场核对并**自动通过**、签发子域；随后常驻 worker 自动写进清单并接通。通过不是自动入驻，也不改变实例自治。
+Joining is application-based: the owner submits in their own site's `/admin`, the platform checks on the spot, **auto-approves**, and issues the subdomain; the resident worker then writes it into the manifest and connects it. Approval is not automatic onboarding, and it does not change instance autonomy.
 
-| 阶段 | 发生什么 |
+| Phase | What happens |
 |------|----------|
-| 提交 | 主理人在实例 `/admin` 的「接入 XKnot」里填子域标签与联系邮箱，由实例代交 `POST /api/applications`，字段为子域标签、名称、简介、运营者、邮箱、区域、时区、标签；也可以直接调中枢接口。`mode` 只接受 `subdomain`、`domain` 必须为空，带了别的值返回 `not_supported` |
-| 查标签 | 提交前先问 `GET /api/subdomains/check?label=`。少于 6 位的标签不签，保留名与已占用的不签；不通过时给出候选 |
-| 自动通过 | 平台校验字段并查重，通过即把申请写成 `approved`（`reviewed_by=auto`），没有待审队列 |
-| 通知 | 立刻寄批准信给申请人，并给运营方寄一封新成员提醒 |
-| 写清单 | 常驻 worker（`server/provision.mjs`）自动跑 `publish`：分配隧道账号与端口，把 `instances.json` 条目（`status: pending`）与 `federation.json` 同名成员一起写入；命令行 `publish` 只用于例外重跑 |
-| 上线 | 隧道接通、`/api/health` 通过后，worker 把 `status` 改成 `active` 并当场重算门户快照，条目出现在地图与目录里 |
+| Submit | the owner fills the subdomain label and contact email in the instance `/admin`'s "join XKnot", submitted on the instance's behalf via `POST /api/applications`, with fields subdomain label, name, intro, operator, email, region, timezone, tags; the hub endpoint can also be called directly. `mode` accepts only `subdomain` and `domain` must be empty; any other value returns `not_supported` |
+| Check the label | before submitting, ask `GET /api/subdomains/check?label=`. Labels under 6 chars are not issued, nor reserved or taken ones; candidates are given on failure |
+| Auto-approve | the platform validates fields and dedupes; on passing it writes the application as `approved` (`reviewed_by=auto`), no pending queue |
+| Notify | immediately sends the approval letter to the applicant and a new-member alert to the operator |
+| Write the manifest | after approval, the resident worker (`server/provision.mjs`) runs `publish`: it allocates the tunnel account and port and writes the `instances.json` entry (`status: pending`) together with the same-name `federation.json` member; the command line is only for an exceptional re-run |
+| Launch | once the tunnel is up and `/api/health` passes, the worker sets `status` to `active` and recomputes the portal snapshot on the spot; the entry appears in the map and directory |
 
-| 情形 | 动作 |
+| Situation | Action |
 |------|------|
-| 新伙伴 | 提交即通过 → worker 写清单（`pending`）→ 自动前置与接通 → 验收通过改 `active` → 快照自动重算 |
-| 改名 | 修改对应条目 |
-| 换 IP | 伙伴提交变更；只改 DNS 与入口配置，`url` 不动 |
-| 换标签 | 换 `url` 与名册 `host`，重新签发；旧子域回收，不做 301 过渡 |
-| 长期失联 | 24 小时提醒，7 天从门户暂时隐藏（条目不删）；恢复探测后自动回来 |
-| 30 天仍未接通 | 从门户暂时隐藏，由人跟进或回收子域 |
-| 违法、欺诈、冒充、商标侵权 | 从清单删除，L3 整组下架并删除缓存 |
-| 伙伴退出 | 删除条目，删除 L3 缓存，回收子域 |
+| New partner | submit which approves → worker writes the manifest (`pending`) → automatic pre-staging and connect → acceptance sets `active` → the snapshot recomputes |
+| Rename | edit the corresponding entry |
+| Change IP | partner submits the change; only DNS and entry config change, `url` does not |
+| Change label | change `url` and roster `host`, re-issue; old subdomain reclaimed, no 301 transition |
+| Long offline | 24-hour reminder, 7 days temporarily hidden from the portal (entry not deleted); back automatically when the probe recovers |
+| 30 days still not connected | temporarily hidden from the portal, followed up or subdomain reclaimed by a person |
+| Illegal, fraudulent, impersonating, trademark-infringing | removed from the manifest, L3 whole-group delisted and cache deleted |
+| Partner leaves | delete the entry, delete the L3 cache, reclaim the subdomain |
 
-申请通过或撤回都不影响站点本身；申请人可以修正信息后重新提交。中枢不托管内容，下架只影响入口，不影响伙伴站点的数据。
+Approval or withdrawal does not affect the site itself; the applicant can correct the info and resubmit. The hub hosts no content; delisting affects only the entry, not the partner site's data.

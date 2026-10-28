@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="960" viewBox="0 0 1200 960">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 1.2 L 10 5 L 0 8.8 Z" fill="#222"/>
+    </marker>
+    <marker id="arrow-start" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 10 1.2 L 0 5 L 10 8.8 Z" fill="#222"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="960" fill="#ffffff"/>
+
+  <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" fill="#111">
+    <text x="40" y="44" font-size="21" font-weight="600">XKnot Federation - Architecture</text>
+    <text x="40" y="70" font-size="13" fill="#555">User plane / data plane / control plane - three roles, two codebases, one HTTP contract</text>
+    <text x="40" y="90" font-size="12" fill="#666">The hub reads partner data only; the rest is issued, configured, or fetched under the contract.</text>
+  </g>
+
+  <!-- Clients -->
+  <rect x="40" y="140" width="200" height="220" rx="14" fill="#ffffff" stroke="#222" stroke-width="1.6"/>
+  <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" text-anchor="middle">
+    <text x="140" y="168" font-size="14" font-weight="600" fill="#111">Clients</text>
+    <g fill="#f4f4f4" stroke="#222" stroke-width="1.4">
+      <rect x="55" y="180" width="170" height="45" rx="8"/>
+      <rect x="55" y="240" width="170" height="45" rx="8"/>
+      <rect x="55" y="300" width="170" height="45" rx="8"/>
+    </g>
+    <text x="140" y="199" font-size="12" font-weight="600" fill="#111">Visitor</text>
+    <text x="140" y="216" font-size="10" fill="#555">browser</text>
+    <text x="140" y="259" font-size="12" font-weight="600" fill="#111">Owner</text>
+    <text x="140" y="276" font-size="10" fill="#555">instance /admin</text>
+    <text x="140" y="319" font-size="12" font-weight="600" fill="#111">Personal Agent</text>
+    <text x="140" y="336" font-size="10" fill="#555">Agent API</text>
+  </g>
+
+  <!-- Entry host -->
+  <rect x="290" y="140" width="280" height="340" rx="14" fill="#ffffff" stroke="#222" stroke-width="1.6"/>
+  <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" text-anchor="middle">
+    <text x="430" y="170" font-size="15" font-weight="600" fill="#111">Entry host</text>
+
+    <rect x="305" y="185" width="250" height="155" rx="8" fill="#f4f4f4" stroke="#222" stroke-width="1.4"/>
+    <text x="430" y="208" font-size="13" font-weight="600" fill="#111">nginx - TLS</text>
+    <text x="430" y="230" font-size="10.5" fill="#333">one server block per subdomain</text>
+    <text x="430" y="252" font-size="10.5" fill="#333">placeholder / cache / access log</text>
+    <text x="430" y="274" font-size="10.5" fill="#333">static or whole-site proxy</text>
+    <text x="430" y="296" font-size="10.5" fill="#333">/admin and /api/admin -&gt; 404</text>
+    <text x="430" y="318" font-size="10.5" fill="#333">public HTTPS only</text>
+
+    <rect x="305" y="355" width="250" height="105" rx="8" fill="#f4f4f4" stroke="#222" stroke-width="1.4"/>
+    <text x="430" y="378" font-size="13" font-weight="600" fill="#111">sshd - reverse tunnel</text>
+    <text x="430" y="400" font-size="10.5" fill="#333">one tunnel account per subdomain</text>
+    <text x="430" y="422" font-size="10.5" fill="#333">one loopback port per subdomain</text>
+    <text x="430" y="444" font-size="10.5" fill="#333">instance dials out</text>
+  </g>
+
+  <!-- Hub host -->
+  <rect x="720" y="140" width="440" height="480" rx="14" fill="#ffffff" stroke="#222" stroke-width="1.6"/>
+  <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" text-anchor="middle">
+    <text x="940" y="170" font-size="15" font-weight="600" fill="#111">Hub host - xknot.si</text>
+
+    <rect x="735" y="185" width="410" height="95" rx="8" fill="#f4f4f4" stroke="#222" stroke-width="1.4"/>
+    <text x="940" y="208" font-size="13" font-weight="600" fill="#111">Portal (static)</text>
+    <text x="940" y="229" font-size="10.5" fill="#333">Vue 3 - en / zh-CN / zh-TW</text>
+    <text x="940" y="248" font-size="10.5" fill="#333">reads /data/hub.json</text>
+    <text x="940" y="266" font-size="10.5" fill="#333">runtime /api/probes and /api/locations</text>
+
+    <rect x="735" y="295" width="410" height="95" rx="8" fill="#f4f4f4" stroke="#222" stroke-width="1.4"/>
+    <text x="940" y="318" font-size="13" font-weight="600" fill="#111">API process</text>
+    <text x="940" y="339" font-size="10.5" fill="#333">Node - SQLite var/xknot.db</text>
+    <text x="940" y="358" font-size="10.5" fill="#333">applications / console / member entry / mail relay</text>
+
+    <rect x="735" y="405" width="410" height="95" rx="8" fill="#f4f4f4" stroke="#222" stroke-width="1.4"/>
+    <text x="940" y="428" font-size="13" font-weight="600" fill="#111">Workers and timers</text>
+    <text x="940" y="449" font-size="10.5" fill="#333">provision 20s / health 15m / republish 10m / traffic 1h</text>
+    <text x="940" y="468" font-size="10.5" fill="#333">writes only its own state</text>
+
+    <rect x="735" y="515" width="410" height="90" rx="8" fill="#f4f4f4" stroke="#222" stroke-width="1.4"/>
+    <text x="940" y="538" font-size="13" font-weight="600" fill="#111">Build pipeline</text>
+    <text x="940" y="559" font-size="10.5" fill="#333">validate -&gt; probe -&gt; fetch -&gt; Vite -&gt; hub.json</text>
+    <text x="940" y="578" font-size="10.5" fill="#333">instances.json / federation.json / var/ / dist/</text>
+  </g>
+
+  <!-- Instance host -->
+  <rect x="290" y="560" width="280" height="290" rx="14" fill="#ffffff" stroke="#222" stroke-width="1.6"/>
+  <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" text-anchor="middle">
+    <text x="430" y="590" font-size="15" font-weight="600" fill="#111">Instance host</text>
+
+    <rect x="305" y="605" width="250" height="85" rx="8" fill="#f4f4f4" stroke="#222" stroke-width="1.4"/>
+    <text x="430" y="628" font-size="13" font-weight="600" fill="#111">Knot WebUI + Backend</text>
+    <text x="430" y="649" font-size="10.5" fill="#333">GET /api/health</text>
+    <text x="430" y="667" font-size="10.5" fill="#333">GET /api/federation/profile</text>
+
+    <rect x="305" y="705" width="250" height="60" rx="8" fill="#f4f4f4" stroke="#222" stroke-width="1.4"/>
+    <text x="430" y="728" font-size="13" font-weight="600" fill="#111">PostgreSQL + uploads</text>
+    <text x="430" y="748" font-size="10" fill="#333">accounts / content / points / review</text>
+
+    <rect x="305" y="780" width="250" height="55" rx="8" fill="#f4f4f4" stroke="#222" stroke-width="1.4"/>
+    <text x="430" y="803" font-size="13" font-weight="600" fill="#111">local /admin + Agent API</text>
+    <text x="430" y="822" font-size="10" fill="#333">local only - never on the public path</text>
+  </g>
+
+  <!-- Connections -->
+  <g fill="none" stroke="#222" stroke-width="1.6">
+    <line x1="240" y1="240" x2="286" y2="240" marker-end="url(#arrow)"/>
+    <line x1="430" y1="484" x2="430" y2="556" stroke-dasharray="5 4" marker-start="url(#arrow-start)" marker-end="url(#arrow)"/>
+    <line x1="720" y1="200" x2="574" y2="200" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <line x1="720" y1="270" x2="574" y2="270" marker-end="url(#arrow)"/>
+    <line x1="574" y1="340" x2="716" y2="340" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <line x1="570" y1="600" x2="716" y2="620" marker-end="url(#arrow)"/>
+  </g>
+
+  <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" text-anchor="middle" fill="#333">
+    <text x="262" y="228" font-size="10">HTTPS</text>
+    <text x="654" y="196" font-size="10">control: issuance</text>
+    <text x="654" y="266" font-size="10">data: GET</text>
+    <text x="654" y="336" font-size="10">entry log -&gt; traffic</text>
+  </g>
+
+  <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" fill="#333">
+    <text x="444" y="506" font-size="10.5">SSH reverse tunnel - instance dials out</text>
+    <text x="444" y="522" font-size="10">probes and fetches use the public URL</text>
+    <text x="580" y="640" font-size="10.5">POST /api/federation/mail</text>
+    <text x="580" y="656" font-size="10">relay - the only runtime write from an instance</text>
+  </g>
+
+  <!-- Notes -->
+  <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" fill="#555">
+    <text x="40" y="880" font-size="11.5">Hub host and entry host may share a machine; ownership still splits by role, not by machine.</text>
+    <text x="40" y="902" font-size="11.5">The hub is read-only for partner data. The only write entries carrying partner content are the join application and delegated mail;</text>
+    <text x="40" y="922" font-size="11.5">relay keeps no body. Everything else it owns is its own manifest, snapshot, or entry config.</text>
+    <text x="40" y="944" font-size="11">The data plane is GET only; delegated mail is the only runtime write from an instance. The hub writes its own list and snapshot.</text>
+  </g>
+</svg>
