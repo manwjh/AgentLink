@@ -28,6 +28,7 @@ import {
   reopenRun,
   switchEntry,
   runStep,
+  STEP_ORDER,
   stepDone,
   stepRetry,
   tunnelFor,
@@ -90,6 +91,62 @@ test("run: starts at the first pending step and reports done steps as skipped", 
   const allocateDone = stepDone(run, "allocate", "knot-tunnel-cpswang / 18090");
   assert.equal(pendingStep(allocateDone).id, "publish");
   assert.equal(allocateDone.steps[0].state, "done");
+});
+
+test("steps: the table is the only place that decides order, retry cap and executor", async () => {
+  // 顺序是一份对外契约：worker 用 dueStep 推、面板按它显示进度、面板上的
+  // 「卡在哪一步」也是这个 id。写死一遍，改动就必须是被看见的。
+  assert.deepEqual(STEP_ORDER, ["allocate", "publish", "account", "sshd", "static", "dns", "vhost", "tls"]);
+
+  // 表里每个 id 都真的能被 runStep 执行：不是「名字在、实现没了」。
+  const run = createRun({
+    application: APP,
+    tunnel: { account: "knot-tunnel-cpswang", port: 18090 },
+    entryHost: "54.169.33.64",
+  });
+  for (const id of STEP_ORDER) {
+    const result = await runStep({
+      step: id,
+      run,
+      application: APP,
+      host: fakeHost({ addresses: ["54.169.33.64"] }),
+      entry: { adminEmail: "ops@xknot.si", entryHost: "54.169.33.64" },
+      roster,
+      publish: async () => ({ skipped: true }),
+    });
+    assert.equal(typeof result.note, "string", `${id} returned no note`);
+  }
+});
+
+test("steps: an id the table does not know fails loudly instead of silently doing nothing", async () => {
+  const run = createRun({
+    application: APP,
+    tunnel: { account: "knot-tunnel-cpswang", port: 18090 },
+    entryHost: "54.169.33.64",
+  });
+  await assert.rejects(
+    runStep({ step: "certbot", run, application: APP, host: fakeHost(), entry: {}, roster, publish: async () => ({}) }),
+    (error) => error instanceof ProvisionError && error.code === "unknown_step"
+  );
+});
+
+test("steps: only the certificate step is capped, so a bad local step keeps retrying", () => {
+  // 上限只给会在外部留配额痕迹的步骤。别的步骤被误加上限，就会在一次改配置没生效时
+  // 悄悄停成 failed，等人发现——比一直重试更糟。
+  const run = createRun({
+    application: APP,
+    tunnel: { account: "knot-tunnel-cpswang", port: 18090 },
+    entryHost: "54.169.33.64",
+  });
+  const at = new Date("2026-10-25T00:00:00Z");
+  for (const id of STEP_ORDER) {
+    let current = run;
+    for (let attempt = 0; attempt < 12; attempt += 1) current = stepRetry(current, id, "synthetic", at);
+    const step = current.steps.find((item) => item.id === id);
+    const capped = id === "tls";
+    assert.equal(current.state, capped ? "failed" : "provisioning", `${id} state after 12 failures`);
+    assert.equal(step.nextAt === null, capped, `${id} nextAt after 12 failures`);
+  }
 });
 
 test("run: a failed step goes back to pending but keeps the error code", () => {

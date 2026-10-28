@@ -15,7 +15,37 @@ import { isIP } from "node:net";
 
 import { normalizePublicKey } from "./validate.mjs";
 
-export const STEP_ORDER = ["allocate", "publish", "account", "sshd", "static", "dns", "vhost", "tls"];
+/**
+ * 步骤表：顺序、失败上限、执行函数写在同一条里。
+ *
+ * 这三件事以前分在三处：顺序一个数组、上限另一个 Map、实现在 runStep 里一段没有
+ * 名字的 if 链。加一步要同时改三处，漏掉任何一处都不报错：只是那一步永远不重试，
+ * 或者表里有名字却没人执行。现在加一步就是加一条，顺序、上限、实现同时到位，
+ * `STEP_ORDER` 与 `attemptCapOf` 都从这一份推出来。
+ *
+ *   attemptCap  连续失败几次就不再自动重试（0 = 一直重试）。
+ *               只有会在外部系统留下配额痕迹的步骤才设上限，理由见 RETRY_BACKOFF_MS。
+ *
+ * 执行函数声明在文件下半部分（函数声明会提升，所以这里能先引用）。
+ */
+const STEPS = [
+  { id: "allocate", attemptCap: 0, run: runAllocate },
+  { id: "publish", attemptCap: 0, run: runPublish },
+  { id: "account", attemptCap: 0, run: runAccount },
+  { id: "sshd", attemptCap: 0, run: runSshd },
+  { id: "static", attemptCap: 0, run: runStatic },
+  { id: "dns", attemptCap: 0, run: runDns },
+  { id: "vhost", attemptCap: 0, run: runVhost },
+  // 证书：Let's Encrypt 对同一主机名的失败授权限制是每小时 5 次。
+  { id: "tls", attemptCap: 5, run: runTls },
+];
+
+const STEP_BY_ID = new Map(STEPS.map((step) => [step.id, step]));
+
+export const STEP_ORDER = STEPS.map((step) => step.id);
+
+/** 未知 id 按 0 处理：老 run 里可能留着已删掉的步骤，重试节拍不该因此炸掉。 */
+const attemptCapOf = (id) => STEP_BY_ID.get(id)?.attemptCap || 0;
 
 const FIRST_PORT = 18090;
 const LAST_PORT = 18190;
@@ -28,9 +58,6 @@ const LAST_PORT = 18190;
 // tls_failed，看不出是被限流还是配置错了。起步比通知链（1 / 5 / 30 分钟）紧一档：
 // 刚签发时的失败多是等 DNS 生效，等一小时太长。
 export const RETRY_BACKOFF_MS = [30_000, 2 * 60_000, 10 * 60_000, 30 * 60_000, 2 * 60 * 60_000];
-
-// 会在外部系统留下配额痕迹的步骤：到上限就转终态，等人处理，不再自动重试。
-const CAPPED_STEPS = new Map([["tls", 5]]);
 
 // 入口侧做完之后等隧道的默认上限。超过这个时长只记一次事件，不反复喊。
 export const AWAITING_TIMEOUT_MS = 30 * 60_000;
@@ -177,7 +204,7 @@ export function stepFailed(run, id, code, now = new Date()) {
 export function stepRetry(run, id, code, now = new Date()) {
   const current = run.steps.find((item) => item.id === id);
   const attempts = (current?.attempts || 0) + 1;
-  const cap = CAPPED_STEPS.get(id) || 0;
+  const cap = attemptCapOf(id);
   const exhausted = cap > 0 && attempts >= cap;
   const wait = RETRY_BACKOFF_MS[Math.min(attempts - 1, RETRY_BACKOFF_MS.length - 1)];
   return {
@@ -690,6 +717,158 @@ async function entryAddresses(host, entryHost) {
 }
 
 // ---- 执行一步 ----
+//
+// 每个执行函数拿到同一份上下文：
+//   run / application / host / entry / roster / publish  与 runStep 收到的参数同名同值
+//   domain = run.host，root = /var/www/<instanceId>
+//
+// 两条约定：
+//   1. 幂等——重跑一次的结果与第一次相同，已有的账号、目录、配置不重建；
+//   2. 只执行、不判断该不该执行——那是 dueStep 的事，这里拿到的就是该干的活。
+
+/** 端口与账号在 createRun 里就定了，这一步只把结果记进 run 的历史。 */
+async function runAllocate({ run }) {
+  return { note: `${run.account} / ${run.port}` };
+}
+
+/** 写清单与名册。清单是公开快照的来源，名册是 sshd 与端口分配的唯一事实。 */
+async function runPublish({ application, run, publish }) {
+  const result = await publish({
+    application,
+    tunnelAccount: run.account,
+    tunnelPort: run.port,
+  });
+  if (result.error) throw new ProvisionError(result.error, JSON.stringify(result.details || null));
+  return { note: result.skipped ? "已在清单与名册里" : "已写入清单与名册" };
+}
+
+/** 建隧道账号并装公钥。 */
+async function runAccount({ run, application, host }) {
+  const home = `/home/${run.account}`;
+  const exists = await host.sudo(["id", "-u", run.account]);
+  if (exists.code !== 0) {
+    const created = await host.sudo([
+      "useradd",
+      "--create-home",
+      "--home-dir",
+      home,
+      "--shell",
+      "/bin/bash",
+      run.account,
+    ]);
+    if (created.code !== 0) throw new ProvisionError("account_failed", created.stderr);
+  }
+  // 最后一道：这里是要写进 root 属主文件的文本。库里存的历史值可能是
+  // 收紧校验之前写进去的，所以到了这一层仍要再验一次——一行公钥变两行，
+  // 等于给入口主机加了第二把钥匙。
+  //
+  // 两种失败分开报：没填是用户还没做这一步（可重试），填错说明库里是脏值
+  // （要人工看），让面板能说清是哪一种。
+  if (!String(application.publicKey || "").trim()) throw new ProvisionError("public_key_missing");
+  const key = normalizePublicKey(application.publicKey);
+  if (!key) throw new ProvisionError("public_key_invalid");
+  await host.sudo(["install", "-d", "-m", "700", "-o", run.account, "-g", run.account, `${home}/.ssh`]);
+  await host.writeRootFile(`${home}/.ssh/authorized_keys`, `${key}\n`, "600", {
+    owner: `${run.account}:${run.account}`,
+  });
+  return { note: "公钥已装" };
+}
+
+/** 按名册整份重写 sshd 的 Match 段，再让 sshd 自己确认这份配置能用。 */
+async function runSshd({ host, roster }) {
+  const includeLine = "Include /etc/ssh/sshd_config.d/*.conf";
+  const main = (await host.readRootFile("/etc/ssh/sshd_config")) || "";
+  if (!main.includes(includeLine)) {
+    await host.writeRootFile("/etc/ssh/sshd_config", `${main.trimEnd()}\n\n${includeLine}\n`, "600");
+  }
+  await host.writeRootFile("/etc/ssh/sshd_config.d/knot-tunnels.conf", renderSshdMatch({ members: roster.members || [] }), "644");
+  const tested = await host.sudo(["/usr/sbin/sshd", "-t"]);
+  if (tested.code !== 0) throw new ProvisionError("sshd_config_invalid", tested.stderr);
+  const reloaded = await host.sudo(["systemctl", "reload", "sshd"]);
+  if (reloaded.code !== 0) await host.sudo(["systemctl", "reload", "ssh"]);
+  return { note: "sshd 已按名册重载" };
+}
+
+/** 静态 root：证书签发前的 ACME 校验目录，以及隧道接通前的占位页。 */
+async function runStatic({ run, application, host, root }) {
+  await host.sudo(["install", "-d", "-m", "755", root]);
+  await host.writeRootFile(`${root}/index.html`, renderPlaceholder({ instanceId: run.instanceId, name: application.name }), "644");
+  return { note: root };
+}
+
+/** 解析得到的地址必须命中入口主机：一条指向别人的 A 记录也能过解析，而 certbot 会替它签证书。 */
+async function runDns({ run, host, domain }) {
+  const addresses = await host.resolve4(domain);
+  if (!addresses.length) {
+    throw new ProvisionError(
+      "dns_missing",
+      `解析不到 ${domain}；入口域名需要一条泛解析 *.xknot.si → ${run.entryHost}`
+    );
+  }
+  const expected = await entryAddresses(host, run.entryHost);
+  if (!expected.length) {
+    throw new ProvisionError("entry_unresolved", `解析不到入口主机 ${run.entryHost || "(未配置)"}`);
+  }
+  if (!addresses.some((address) => expected.includes(address))) {
+    throw new ProvisionError(
+      "dns_mismatch",
+      `${domain} → ${addresses.join(", ")}；入口是 ${run.entryHost}（${expected.join(", ")}）`
+    );
+  }
+  return { note: addresses.join(", ") };
+}
+
+/** 只有 80 的入口 conf：够 certbot 做 HTTP-01，证书到手前不写 443。 */
+async function runVhost({ run, host, domain, root }) {
+  // 只写中枢自己的 conf：伙伴已经用 push-entry.sh 推过静态入口时，这一步不能盖掉它。
+  // 首次开通时文件不存在，isManagedEntryConf(null) 为真，照常写。
+  const file = `/etc/nginx/conf.d/${domain}.conf`;
+  if (!isManagedEntryConf(await host.readRootFile(file))) {
+    return { note: "入口 conf 由外部管理（静态投放），未覆盖", external: true };
+  }
+  await host.writeRootFile(file, renderHttpVhost({ domain, root }), "644");
+  const tested = await host.sudo(["nginx", "-t"]);
+  if (tested.code !== 0) throw new ProvisionError("nginx_config_invalid", tested.stderr);
+  const applied = await reloadNginx({ host });
+  return { note: applied.restarted ? "HTTP 入口已生效（master 重新读取配置）" : "HTTP 入口已生效" };
+}
+
+/** 签证书，然后把 conf 换成 443 + /api 反代的版本。 */
+async function runTls({ run, host, entry, domain, root }) {
+  const issued = await host.sudo(
+    [
+      "/usr/bin/certbot",
+      "certonly",
+      "--webroot",
+      "-w",
+      root,
+      "-d",
+      domain,
+      "--cert-name",
+      domain,
+      "--non-interactive",
+      "--agree-tos",
+      "-m",
+      entry.adminEmail,
+      "--keep-until-expiring",
+    ],
+    { timeoutMs: 180_000 }
+  );
+  if (issued.code !== 0) throw new ProvisionError("tls_failed", tail(issued.stderr));
+  // 证书照签（ACME 校验用的是静态 root，与 conf 归属无关），但 conf 依旧是
+  // 谁写的归谁：外部管理的入口只把证书交给它，不覆盖它的反代/静态配置。
+  const file = `/etc/nginx/conf.d/${domain}.conf`;
+  if (!isManagedEntryConf(await host.readRootFile(file))) {
+    return { note: "证书已签发；入口 conf 由外部管理，未覆盖", external: true };
+  }
+  await host.writeRootFile(file, renderVhost({ domain, root, port: run.port }), "644");
+  const tested = await host.sudo(["nginx", "-t"]);
+  if (tested.code !== 0) throw new ProvisionError("nginx_config_invalid", tested.stderr);
+  const applied = await reloadNginx({ host });
+  return {
+    note: applied.restarted ? "证书已签发，/api 反代已接上（master 重新读取配置）" : "证书已签发，/api 反代已接上",
+  };
+}
 
 /**
  * 执行一个步骤。host 是入口主机的能力接口，便于测试时替换：
@@ -698,161 +877,26 @@ async function entryAddresses(host, entryHost) {
  *   resolve4(hostname)             → string[]
  *   readRootFile(path)             → string | null
  */
-export async function runStep({
-  step,
-  run,
-  application,
-  host,
-  entry,
-  roster,
-  publish,
-}) {
+export async function runStep({ step, run, application, host, entry, roster, publish }) {
   // run.host 与 run.account 会被原样插进 nginx / sshd 的配置，写之前按签发
   // 规则复校一遍：清单里的 url 由别处校验，这里不能假定它一定干净。
   assertSafeRun(run);
 
-  const domain = run.host;
-  const root = `/var/www/${run.instanceId}`;
+  const definition = STEP_BY_ID.get(step);
+  // 表里没有这个 id 就是调用方传错了（拼错，或留下了已删掉的步骤）。报错而不是
+  // 静默返回：静默会让这条单停在 provisioning，而日志里一行痕迹都没有。
+  if (!definition) throw new ProvisionError("unknown_step", step);
 
-  if (step === "allocate") {
-    return { note: `${run.account} / ${run.port}` };
-  }
-
-  if (step === "publish") {
-    const result = await publish({
-      application,
-      tunnelAccount: run.account,
-      tunnelPort: run.port,
-    });
-    if (result.error) throw new ProvisionError(result.error, JSON.stringify(result.details || null));
-    return { note: result.skipped ? "已在清单与名册里" : "已写入清单与名册" };
-  }
-
-  if (step === "account") {
-    const home = `/home/${run.account}`;
-    const exists = await host.sudo(["id", "-u", run.account]);
-    if (exists.code !== 0) {
-      const created = await host.sudo([
-        "useradd",
-        "--create-home",
-        "--home-dir",
-        home,
-        "--shell",
-        "/bin/bash",
-        run.account,
-      ]);
-      if (created.code !== 0) throw new ProvisionError("account_failed", created.stderr);
-    }
-    // 最后一道：这里是要写进 root 属主文件的文本。库里存的历史值可能是
-    // 收紧校验之前写进去的，所以到了这一层仍要再验一次——一行公钥变两行，
-    // 等于给入口主机加了第二把钥匙。
-    //
-    // 两种失败分开报：没填是用户还没做这一步（可重试），填错说明库里是脏值
-    // （要人工看），让面板能说清是哪一种。
-    if (!String(application.publicKey || "").trim()) throw new ProvisionError("public_key_missing");
-    const key = normalizePublicKey(application.publicKey);
-    if (!key) throw new ProvisionError("public_key_invalid");
-    await host.sudo(["install", "-d", "-m", "700", "-o", run.account, "-g", run.account, `${home}/.ssh`]);
-    await host.writeRootFile(`${home}/.ssh/authorized_keys`, `${key}\n`, "600", {
-      owner: `${run.account}:${run.account}`,
-    });
-    return { note: "公钥已装" };
-  }
-
-  if (step === "sshd") {
-    const includeLine = "Include /etc/ssh/sshd_config.d/*.conf";
-    const main = (await host.readRootFile("/etc/ssh/sshd_config")) || "";
-    if (!main.includes(includeLine)) {
-      await host.writeRootFile("/etc/ssh/sshd_config", `${main.trimEnd()}\n\n${includeLine}\n`, "600");
-    }
-    await host.writeRootFile("/etc/ssh/sshd_config.d/knot-tunnels.conf", renderSshdMatch({ members: roster.members || [] }), "644");
-    const tested = await host.sudo(["/usr/sbin/sshd", "-t"]);
-    if (tested.code !== 0) throw new ProvisionError("sshd_config_invalid", tested.stderr);
-    const reloaded = await host.sudo(["systemctl", "reload", "sshd"]);
-    if (reloaded.code !== 0) await host.sudo(["systemctl", "reload", "ssh"]);
-    return { note: "sshd 已按名册重载" };
-  }
-
-  if (step === "static") {
-    await host.sudo(["install", "-d", "-m", "755", root]);
-    await host.writeRootFile(`${root}/index.html`, renderPlaceholder({ instanceId: run.instanceId, name: application.name }), "644");
-    return { note: root };
-  }
-
-  if (step === "dns") {
-    const addresses = await host.resolve4(domain);
-    if (!addresses.length) {
-      throw new ProvisionError(
-        "dns_missing",
-        `解析不到 ${domain}；入口域名需要一条泛解析 *.xknot.si → ${run.entryHost}`
-      );
-    }
-    // 解析得到地址不等于解析对了：一条指向别人服务器的 A 记录也能过，
-    // 而 certbot 会替这个域名去签一张证书。必须命中入口主机。
-    const expected = await entryAddresses(host, run.entryHost);
-    if (!expected.length) {
-      throw new ProvisionError("entry_unresolved", `解析不到入口主机 ${run.entryHost || "(未配置)"}`);
-    }
-    if (!addresses.some((address) => expected.includes(address))) {
-      throw new ProvisionError(
-        "dns_mismatch",
-        `${domain} → ${addresses.join(", ")}；入口是 ${run.entryHost}（${expected.join(", ")}）`
-      );
-    }
-    return { note: addresses.join(", ") };
-  }
-
-  if (step === "vhost") {
-    // 只写中枢自己的 conf：伙伴已经用 push-entry.sh 推过静态入口时，这一步不能盖掉它。
-    // 首次开通时文件不存在，isManagedEntryConf(null) 为真，照常写。
-    const file = `/etc/nginx/conf.d/${domain}.conf`;
-    if (!isManagedEntryConf(await host.readRootFile(file))) {
-      return { note: "入口 conf 由外部管理（静态投放），未覆盖", external: true };
-    }
-    await host.writeRootFile(file, renderHttpVhost({ domain, root }), "644");
-    const tested = await host.sudo(["nginx", "-t"]);
-    if (tested.code !== 0) throw new ProvisionError("nginx_config_invalid", tested.stderr);
-    const applied = await reloadNginx({ host });
-    return { note: applied.restarted ? "HTTP 入口已生效（master 重新读取配置）" : "HTTP 入口已生效" };
-  }
-
-  if (step === "tls") {
-    const issued = await host.sudo(
-      [
-        "/usr/bin/certbot",
-        "certonly",
-        "--webroot",
-        "-w",
-        root,
-        "-d",
-        domain,
-        "--cert-name",
-        domain,
-        "--non-interactive",
-        "--agree-tos",
-        "-m",
-        entry.adminEmail,
-        "--keep-until-expiring",
-      ],
-      { timeoutMs: 180_000 }
-    );
-    if (issued.code !== 0) throw new ProvisionError("tls_failed", tail(issued.stderr));
-    // 证书照签（ACME 校验用的是静态 root，与 conf 归属无关），但 conf 依旧是
-    // 谁写的归谁：外部管理的入口只把证书交给它，不覆盖它的反代/静态配置。
-    const file = `/etc/nginx/conf.d/${domain}.conf`;
-    if (!isManagedEntryConf(await host.readRootFile(file))) {
-      return { note: "证书已签发；入口 conf 由外部管理，未覆盖", external: true };
-    }
-    await host.writeRootFile(file, renderVhost({ domain, root, port: run.port }), "644");
-    const tested = await host.sudo(["nginx", "-t"]);
-    if (tested.code !== 0) throw new ProvisionError("nginx_config_invalid", tested.stderr);
-    const applied = await reloadNginx({ host });
-    return {
-      note: applied.restarted ? "证书已签发，/api 反代已接上（master 重新读取配置）" : "证书已签发，/api 反代已接上",
-    };
-  }
-
-  throw new ProvisionError("unknown_step", step);
+  return definition.run({
+    run,
+    application,
+    host,
+    entry,
+    roster,
+    publish,
+    domain: run.host,
+    root: `/var/www/${run.instanceId}`,
+  });
 }
 
 /**
