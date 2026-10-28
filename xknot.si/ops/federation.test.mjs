@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { validateRoster } from "./validate-federation.mjs";
+import { isTunnelAccount, validateRoster } from "./validate-federation.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -48,6 +48,23 @@ test("a roster without a founder is rejected", async () => {
   for (const member of broken.members) member.role = "partner";
   const problems = validateRoster(broken, manifest);
   assert.ok(problems.some(([id, errors]) => id === "—" && errors.some((e) => e.startsWith("founder:"))));
+});
+
+test("a tunnel account must be one this process owns", async () => {
+  const { roster, manifest } = await load();
+
+  // 名册会被拿去建系统账号并写进 sshd 的 Match User：root 之类的名字必须在写之前挡住。
+  const stolen = clone(roster);
+  stolen.members.find((member) => member.id === "zhoujj").tunnel = { account: "root", port: 18081 };
+  const errors = validateRoster(stolen, manifest).find(([id]) => id === "zhoujj")?.[1] || [];
+  assert.ok(errors.some((e) => e.startsWith("tunnel.account:")));
+
+  assert.equal(isTunnelAccount("knot-tunnel"), true);
+  assert.equal(isTunnelAccount("knot-tunnel-cpswang"), true);
+  assert.equal(isTunnelAccount("knot-tunnel-"), false);
+  assert.equal(isTunnelAccount("ec2-user"), false);
+  assert.equal(isTunnelAccount("Knot-Tunnel"), false);
+  assert.equal(isTunnelAccount(null), false);
 });
 
 test("tunnel accounts and ports must be unique", async () => {

@@ -23,7 +23,28 @@ export const MODES = ["subdomain"];
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$/;
 const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const ACCOUNT_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
+// 隧道账号会被拿去在入口主机上建系统账号：字符集够干净不代表名字安全，
+// root、ec2-user、nginx 都能通过一条纯字符集的正则。只放行本流程自己的命名。
+const ACCOUNT_RE = /^knot-tunnel(?:-[a-z0-9][a-z0-9-]{0,20})?$/;
+// 就算将来改了前缀，这些名字也不许当隧道账号：它们已经属于系统或别的服务。
+const RESERVED_ACCOUNTS = new Set([
+  "root",
+  "ec2-user",
+  "nginx",
+  "adm",
+  "sshd",
+  "www-data",
+  "postgres",
+  "ubuntu",
+  "admin",
+  "daemon",
+  "nobody",
+]);
+
+/** 名册里的隧道账号能不能拿来建号。写名册与用名册的两侧共用这一条。 */
+export function isTunnelAccount(value) {
+  return typeof value === "string" && ACCOUNT_RE.test(value) && !RESERVED_ACCOUNTS.has(value);
+}
 
 function hostOf(value) {
   try {
@@ -81,8 +102,8 @@ function validateMember(member, index, errors, seen) {
     if (typeof tunnel !== "object" || Array.isArray(tunnel)) {
       errors.push("tunnel: must be null or an object");
     } else {
-      if (typeof tunnel.account !== "string" || !ACCOUNT_RE.test(tunnel.account)) {
-        errors.push("tunnel.account: must be a lowercase system user name");
+      if (!isTunnelAccount(tunnel.account)) {
+        errors.push("tunnel.account: must be knot-tunnel or knot-tunnel-<label>; system accounts are refused");
       } else if (seen.accounts.has(tunnel.account)) {
         errors.push(`tunnel.account: duplicate "${tunnel.account}"`);
       } else {
