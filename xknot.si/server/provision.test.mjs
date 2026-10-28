@@ -23,6 +23,8 @@ import {
   reloadNginx,
   renderHttpVhost,
   renderPlaceholder,
+  renderRobotsTxt,
+  renderSitemapXml,
   renderSshdMatch,
   renderVhost,
   reopenRun,
@@ -64,6 +66,11 @@ function fakeHost(overrides = {}) {
     async writeRootFile(file, text, mode, extra) {
       fileWrites.push({ file, text, mode, ...extra });
       calls.push({ argv: ["write", file], input: text });
+    },
+    // 公开文件走原子落地：先写临时文件再 rename，nginx 不会读到半份。
+    async writeEntryFile(file, text) {
+      fileWrites.push({ file, text, mode: "644", atomic: true });
+      calls.push({ argv: ["write-entry", file], input: text });
     },
     async resolve4() {
       return overrides.addresses ?? ["54.169.33.64"];
@@ -285,6 +292,44 @@ test("render: the log format is declared in the same file, under a per-domain na
   assert.match(logFormatName("a-b.xknot.si"), /^[a-z0-9_]+$/);
 });
 
+test("render: crawler entry comes from the entry disk, not the SPA fallback", () => {
+  // 整站反代时这两条会落进实例 WebUI 的 SPA 兜底，回一张 200 的 index.html：
+  // robots 变成空规则、站点地图变成无效文件，而且都不报错。
+  const conf = renderVhost({ domain: "cpswang.xknot.si", root: "/var/www/cpswang", port: 18090, entry: true });
+  for (const name of ["robots.txt", "sitemap.xml"]) {
+    const block = conf.slice(conf.indexOf(`location = /${name}`), conf.indexOf("location = /discover.json"));
+    assert.ok(block.includes(`try_files /${name} @knot_origin;`), `${name} 必须先从磁盘取，再回落隧道`);
+    assert.match(block, /add_header Cache-Control "public, max-age=300" always;/);
+  }
+  // 静态投放那一档由实例自己的文件出，入口不重复写。
+  const staticConf = renderVhost({ domain: "cpswang.xknot.si", root: "/var/www/cpswang", port: 18090 });
+  assert.doesNotMatch(staticConf, /location = \/robots\.txt/);
+});
+
+test("render: generated robots and sitemap match what an instance serves itself", () => {
+  // 同一台机器上还有走静态投放的子域，那两份文件由实例侧写入。两边不一致，
+  // 同一个联盟的站点地图就会分成两种格式。
+  assert.equal(
+    renderRobotsTxt("https://cpswang.xknot.si"),
+    [
+      "User-agent: *",
+      "Allow: /",
+      "Disallow: /api/",
+      "Disallow: /admin",
+      "",
+      "Sitemap: https://cpswang.xknot.si/sitemap.xml",
+      "",
+    ].join("\n"),
+  );
+  const sitemap = renderSitemapXml("https://cpswang.xknot.si/");
+  assert.match(sitemap, /^<\?xml version="1\.0" encoding="UTF-8"\?>/);
+  // 末尾的斜杠不能叠成 //sitemap.xml。
+  assert.equal((sitemap.match(/<loc>/g) || []).length, 2);
+  assert.match(sitemap, /<loc>https:\/\/cpswang\.xknot\.si\/<\/loc>/);
+  assert.match(sitemap, /<loc>https:\/\/cpswang\.xknot\.si\/discover<\/loc>/);
+  assert.doesNotMatch(sitemap, /\/\/discover/);
+});
+
 test("render: sshd gives every member exactly one listen port and no shell", () => {
   const conf = renderSshdMatch({ members: roster.members });
   assert.match(conf, /Match User knot-tunnel\n/);
@@ -402,6 +447,77 @@ test("step vhost: writes HTTP-only conf, then tests and reloads nginx", async ()
   assert.doesNotMatch(conf.text, /listen 443/);
   assert.ok(host.calls.some((call) => call.argv.join(" ") === "nginx -t"));
   assert.ok(host.calls.some((call) => call.argv.join(" ") === "systemctl reload nginx"));
+});
+
+test("step static: lays down the crawler entry beside the placeholder page", async () => {
+  // 整站反代时 nginx 从这两份文件直接出，不穿隧道。文件必须在这一步就位：
+  // 等到「隧道通了」再写，中间那段时间爬虫看到的仍是 SPA 兜底。
+  const host = fakeHost();
+  const run = createRun({
+    application: APP,
+    tunnel: { account: "knot-tunnel-cpswang", port: 18090 },
+    entryHost: "54.169.33.64",
+  });
+  await runStep({ step: "static", run, application: APP, host, entry: {}, roster });
+
+  const robots = host.fileWrites.find((write) => write.file === "/var/www/cpswang/robots.txt");
+  assert.ok(robots, "robots.txt 必须落到入口磁盘上");
+  assert.ok(robots.atomic, "公开文件要原子落地，nginx 随时可能在读");
+  assert.match(robots.text, /^Sitemap: https:\/\/cpswang\.xknot\.si\/sitemap\.xml$/m);
+
+  const sitemap = host.fileWrites.find((write) => write.file === "/var/www/cpswang/sitemap.xml");
+  assert.ok(sitemap, "sitemap.xml 必须落到入口磁盘上");
+  // loc 必须是绝对地址：相对地址在站点地图里等于没写。
+  assert.match(sitemap.text, /<loc>https:\/\/cpswang\.xknot\.si\/<\/loc>/);
+});
+
+test("reconcile: an already-provisioned subdomain gets the crawler entry backfilled", async () => {
+  // 签发那一步只跑一次。已经开通的子域每轮只走 switchEntry 核对，缺了这一层，
+  // 新加的 location 照样回落到 SPA 兜底——修好的 conf 等于没修。
+  const host = fakeHost();
+  const run = createRun({
+    application: APP,
+    tunnel: { account: "knot-tunnel-cpswang", port: 18090 },
+    entryHost: "54.169.33.64",
+  });
+  await switchEntry({ host, run, entry: true });
+  assert.ok(host.fileWrites.some((write) => write.file === "/var/www/cpswang/robots.txt"));
+  assert.ok(host.fileWrites.some((write) => write.file === "/var/www/cpswang/sitemap.xml"));
+});
+
+test("reconcile: an externally managed conf keeps its own directory untouched", async () => {
+  // 伙伴推静态 conf 时，robots.txt 由实例自己写。中枢再插一份进去就是两个来源，
+  // 谁都不知道最终生效的是哪一份——所以连目录都不碰。
+  const host = fakeHost({
+    files: { "/etc/nginx/conf.d/cpswang.xknot.si.conf": "# 由 ops/scripts/render-config.mjs 生成\nserver {}\n" },
+  });
+  const run = createRun({
+    application: APP,
+    tunnel: { account: "knot-tunnel-cpswang", port: 18090 },
+    entryHost: "54.169.33.64",
+  });
+  const result = await switchEntry({ host, run, entry: true });
+  assert.equal(result.external, true);
+  assert.equal(host.fileWrites.length, 0);
+});
+
+test("reconcile: content already in place is not rewritten", async () => {
+  // 每 20 秒核对一次，每次都重写会把 nginx 的缓存打空，也让磁盘无谓地转。
+  const domain = "cpswang.xknot.si";
+  const origin = `https://${domain}`;
+  const host = fakeHost({
+    files: {
+      "/var/www/cpswang/robots.txt": renderRobotsTxt(origin),
+      "/var/www/cpswang/sitemap.xml": renderSitemapXml(origin),
+    },
+  });
+  const run = createRun({
+    application: APP,
+    tunnel: { account: "knot-tunnel-cpswang", port: 18090 },
+    entryHost: "54.169.33.64",
+  });
+  await switchEntry({ host, run, entry: true });
+  assert.equal(host.fileWrites.filter((write) => /robots\.txt|sitemap\.xml/.test(write.file)).length, 0);
 });
 
 test("step sshd: generates the file from the roster and keeps the Include line once", async () => {
@@ -614,15 +730,20 @@ test("render: once the tunnel is up, / proxies to the instance so the WebUI show
   // `location /`、`/assets/`、`/api/web/uploads`、附件/音频/Agent 上传入口、`/api/`，
   // 以及 /discover.json 的回落入口。
   assert.equal((conf.match(/proxy_pass http:\/\/knot_entry_18090;/g) || []).length, 6);
-  // 占位页不再有人访问：静态 root 上只剩 ACME 校验与中枢取回的公开快照。
-  assert.equal((conf.match(/try_files/g) || []).length, 1);
+  // 占位页不再有人访问：静态 root 上只剩 ACME 校验、两条爬虫入口与中枢取回的公开快照。
+  assert.equal((conf.match(/try_files/g) || []).length, 3);
   assert.match(conf, /try_files \/discover\.json @knot_origin;/);
+  assert.match(conf, /try_files \/robots\.txt @knot_origin;/);
+  assert.match(conf, /try_files \/sitemap\.xml @knot_origin;/);
   assert.doesNotMatch(conf, /try_files \$uri \$uri\/ \/index\.html;/);
   assert.doesNotMatch(conf, /location = \/index\.html/);
   // 回源的 location 不自己发安全头：Backend 每个响应都发，这里再叠一遍就是两行同名头。
-  // 唯一的例外是下面那条从磁盘直出的公开快照，它不经过 Backend。
-  const withoutSnapshot = conf.replace(/location = \/discover\.json \{[^}]*\}/, "");
-  assert.doesNotMatch(withoutSnapshot, /add_header X-Content-Type-Options/);
+  // 例外是从磁盘直出的三条（公开快照与两条爬虫入口），它们不经过 Backend。
+  const withoutDiskFiles = conf
+    .replace(/location = \/discover\.json \{[^}]*\}/, "")
+    .replace(/location = \/robots\.txt \{[^}]*\}/, "")
+    .replace(/location = \/sitemap\.xml \{[^}]*\}/, "");
+  assert.doesNotMatch(withoutDiskFiles, /add_header X-Content-Type-Options/);
 });
 
 test("render: the public snapshot comes from the entry disk and falls back to the tunnel", () => {
@@ -700,6 +821,8 @@ test("switch: an identical conf is left alone; a failing test restores the old o
       writes.push(text);
       current = text;
     },
+    // 爬虫入口在这几条用例里不是重点：让它可以写，但只数 conf。
+    writeEntryFile: async () => {},
     sudo: async (argv) => ({ code: argv[0] === "nginx" ? testCode : 0, stdout: "", stderr: "boom" }),
   };
   const run = { host: "cpswang.xknot.si", instanceId: "cpswang", port: 18090 };
@@ -798,6 +921,7 @@ test("switch: a rejected reload that cannot restart puts the old conf back", asy
       writes.push(text);
       current = text;
     },
+    writeEntryFile: async () => {},
     sudo: async (argv) => {
       calls.push(argv.join(" "));
       if (argv[0] === "nginx") return { code: 0, stdout: "", stderr: "" };
@@ -902,6 +1026,7 @@ test("render: a conf someone else wrote is never rewritten", async () => {
   const host = {
     readRootFile: async () => external,
     writeRootFile: async (_file, text) => writes.push(text),
+    writeEntryFile: async () => {},
     sudo: async () => ({ code: 0, stdout: "", stderr: "" }),
   };
   const run = { host: "zhoujj.xknot.si", instanceId: "zhoujj", port: 18091 };

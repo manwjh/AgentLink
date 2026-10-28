@@ -323,6 +323,40 @@ export function renderPlaceholder({ instanceId, name }) {
 `;
 }
 
+/**
+ * 站点给自己声明的两条爬虫入口。
+ *
+ * 为什么由入口来生成、而不是等实例发：整站反代的子域里，`/robots.txt` 与
+ * `/sitemap.xml` 会落进实例 WebUI 的 SPA 兜底，回一张 200 的 index.html。Google 把
+ * 前者当成空规则（全站放开、也没有 Sitemap 指引），把后者当成无效站点地图。这两条
+ * 都不报错，只是安静地什么都没起作用。
+ *
+ * 生成规则必须与实例自己发的那两条**逐字一致**：同一台机器上还有走静态投放的子域，
+ * 它们的这两份文件由实例侧写入。两边内容不同，同一个联盟的站点地图就会分成两种格式。
+ * 这是刻意保留的重复——两个项目不互相 import，只靠实现对齐。
+ *
+ * 只有 `/` 与 `/discover` 是真正的静态页：其余路由要么回源 `/api`，要么是账户态页面。
+ * 不写 lastmod：档案的更新时间是「站点介绍改于何时」，拿它当页面更新时间是假的。
+ */
+export function renderRobotsTxt(origin) {
+  const base = String(origin || "").replace(/\/+$/, "");
+  return ["User-agent: *", "Allow: /", "Disallow: /api/", "Disallow: /admin", "", `Sitemap: ${base}/sitemap.xml`, ""].join("\n");
+}
+
+export function renderSitemapXml(origin) {
+  const base = String(origin || "").replace(/\/+$/, "");
+  const urls = ["/", "/discover"].map(
+    (pathname) => `  <url>\n    <loc>${escapeHtml(base + pathname)}</loc>\n  </url>`,
+  );
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...urls,
+    "</urlset>",
+    "",
+  ].join("\n");
+}
+
 /** 只有 80：够 certbot 做 HTTP-01，证书拿到之前不写 443，免得 nginx -t 失败。 */
 export function renderHttpVhost({ domain, root }) {
   return `# ${domain}：签发阶段的 HTTP 入口，${MANAGED_MARK}。
@@ -531,6 +565,25 @@ ${proxyDirectives(8, upstream)}
         # 上游对 /assets/ 发的是 no-cache 语义（资源要能立刻换），入口按哈希名缓存。
         proxy_ignore_headers Cache-Control Expires Set-Cookie;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    # 爬虫入口放在入口磁盘上。整站反代时这两条会落进实例 WebUI 的 SPA 兜底，
+    # 回一张 200 的 index.html：Google 把 robots 读成空规则（全站放开、没有 Sitemap
+    # 指引），把站点地图读成无效文件。两件事都不报错，只是安静地什么都没起作用。
+    # 文件由签发时写进 root，内容与实例自己发的逐字一致。
+    # 磁盘上没有文件时回落到隧道：伙伴升级到自带这两条的版本后入口不再挡路。
+    location = /robots.txt {
+        root ${root};
+        try_files /robots.txt @knot_origin;
+        add_header Cache-Control "public, max-age=300" always;
+        add_header X-Content-Type-Options nosniff always;
+    }
+
+    location = /sitemap.xml {
+        root ${root};
+        try_files /sitemap.xml @knot_origin;
+        add_header Cache-Control "public, max-age=300" always;
+        add_header X-Content-Type-Options nosniff always;
     }
 
     # 公开快照放在入口磁盘上：首屏数据不必由每个访客穿一次隧道去确认有没有新内容。
@@ -789,11 +842,32 @@ async function runSshd({ host, roster }) {
   return { note: "sshd 已按名册重载" };
 }
 
-/** 静态 root：证书签发前的 ACME 校验目录，以及隧道接通前的占位页。 */
-async function runStatic({ run, application, host, root }) {
+/** 静态 root：证书签发前的 ACME 校验目录、隧道接通前的占位页，以及两条爬虫入口。 */
+async function runStatic({ run, application, host, domain, root }) {
   await host.sudo(["install", "-d", "-m", "755", root]);
   await host.writeRootFile(`${root}/index.html`, renderPlaceholder({ instanceId: run.instanceId, name: application.name }), "644");
+  // 整站反代时 nginx 从这两份文件直接出，不穿隧道（见 renderVhost 里那两条 location）。
+  // 写在这里是因为这一步本来就在铺磁盘：签发、DNS、证书都对之前，文件已经在位。
+  await writeCrawlerEntry({ host, domain, root });
   return { note: root };
+}
+
+/**
+ * 把 robots.txt 与 sitemap.xml 写到入口磁盘上，内容没变就不动。
+ *
+ * 除了签发那一步，每轮核对也要调用一次（见 switchEntry）：已经开通的子域不会再走
+ * 一遍签发流程，缺了这一层，修好的 conf 照样回落到 SPA 兜底，等于没修。
+ * 走 writeEntryFile（先写临时文件再 rename），nginx 随时可能正在读这两个路径。
+ */
+async function writeCrawlerEntry({ host, domain, root }) {
+  const origin = `https://${domain}`;
+  for (const [name, text] of [
+    ["robots.txt", renderRobotsTxt(origin)],
+    ["sitemap.xml", renderSitemapXml(origin)],
+  ]) {
+    const file = `${root}/${name}`;
+    if ((await host.readRootFile(file)) !== text) await host.writeEntryFile(file, text);
+  }
 }
 
 /** 解析得到的地址必须命中入口主机：一条指向别人的 A 记录也能过解析，而 certbot 会替它签证书。 */
@@ -985,13 +1059,17 @@ export async function switchEntry({ host, run, entry = true }) {
   const domain = run.host;
   const root = `/var/www/${run.instanceId}`;
   const file = `/etc/nginx/conf.d/${domain}.conf`;
-  const conf = renderVhost({ domain, root, port: run.port, entry });
   const current = await host.readRootFile(file);
-  if (current === conf) return { changed: false };
   // 伙伴自己跑 push-entry.sh 推上来的静态 conf 不归中枢管。中枢每 20 秒核对一次，
   // 若在这里覆盖，两边会互相改写：伙伴推静态、中枢改回反代、伙伴再推……
-  // 认「谁写的」而不是「内容像不像」，见 MANAGED_MARK。
+  // 认「谁写的」而不是「内容像不像」，见 MANAGED_MARK。连它目录里的文件也不碰：
+  // 那份 robots.txt 由实例自己写，中枢插一份进去只会让两个来源互相打脸。
   if (!isManagedEntryConf(current)) return { changed: false, external: true };
+  // 爬虫入口每轮核对一次，文件不在就补。签发那一步只跑一次，已经开通的子域不会再
+  // 走一遍；少了这一层，新加的 location 也照样回落到 SPA 兜底，等于没修。
+  if (entry) await writeCrawlerEntry({ host, domain, root });
+  const conf = renderVhost({ domain, root, port: run.port, entry });
+  if (current === conf) return { changed: false };
 
   await host.writeRootFile(file, conf, "644");
   const tested = await host.sudo(["nginx", "-t"]);

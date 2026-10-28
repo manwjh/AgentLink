@@ -331,6 +331,9 @@ The portal home page is a single-page shell: a crawler that does not run JS sees
 
 The directory reads `dist/data/hub.json`, the same data as the portal; entries with `health.hidden` are skipped, and only `https` site addresses are kept. The origin defaults to `https://xknot.si` and can be overridden with `--origin` or `XKNOT_HUB_ORIGIN` (a local build writes it into `canonical` and the sitemap).
 
+Instance subdomains get their own pair, written by the entry rather than by the instance: a whole-site proxied subdomain falls through `/robots.txt` and `/sitemap.xml` into the WebUI's SPA fallback and answers with a 200 `index.html`, which a search engine reads as an empty rule set and an invalid sitemap — silently, with no error anywhere. `server/provision.mjs` therefore generates both files into the subdomain's entry directory, and every proxied vhost serves them from that disk before falling back to the tunnel. They are generated even on the reconcile pass, not only at first provisioning: an already-open subdomain never runs the provisioning steps again, so without that pass a fixed vhost would keep falling back. The content matches byte for byte what a statically served instance writes itself, because the two paths share one domain and a mismatch would split the federation's sitemaps into two formats. Only `/` and `/discover` are listed — the rest is either API or account state.
+
+
 ### 3.4 Search-console verification
 
 Impressions, clicks, and query terms exist only in the search engines' own webmaster consoles; no server-side log can recover them. What the site has to supply is a proof of ownership, and of the three accepted proofs, the meta tag is the only one that needs nothing outside the repo: no DNS record, no oddly named file at the root.
