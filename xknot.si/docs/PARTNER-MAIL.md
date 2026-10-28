@@ -15,7 +15,7 @@ This chain is fully in code:
 | Location | Role |
 |------|------|
 | `server/notify.mjs` | template registry `TEMPLATES[event]`, 9 partner mails + 2 internal mails, all three languages |
-| `server/store.mjs` | `notify_log`, `claim_tokens`, application state, and `state_version` |
+| `server/store/schema.mjs` + `server/store/mail-log.mjs` | `notify_log`, `claim_tokens`, application state, and `state_version` |
 | `server/app.mjs` | submission (auto-approval), case actions, handoff, claim endpoints, and send triggers |
 | `server/pages.mjs` | the `/case/`, `/claim/` two script-free pages |
 | `server/admin-cli.mjs` | `notify` / `handoff` / `claims` / `claim-revoke` / `live` / `contact-revalidate` / `suspend` / `retire` / `notify-log` |
@@ -810,7 +810,7 @@ Internal mail goes to the operator and does not enter the partner chain. It is t
 | Location | Actual approach |
 |------|----------|
 | `server/notify.mjs` | `TEMPLATES[event] = { audience, subject: {locale}, text: {locale} }`; placeholder `{name}`; `buildMail(event, application, options)` |
-| `server/store.mjs` | `notify_log` + `unique(event, case_id, state_version)`; `state_version` +1 on every state transition; operational events (issue/handoff/live) pass no version, allowing resend |
+| `server/store/schema.mjs` + `server/store/mail-log.mjs` | `notify_log` + `unique(event, case_id, state_version)`; `state_version` +1 on every state transition; operational events (issue/handoff/live) pass no version, allowing resend |
 | `server/app.mjs` | submit (auto-approval), case actions, handoff call `dispatchMail`; rate-limit hits record `throttled` |
 | `server/pages.mjs` | the two pages are script-free and build-free; all variables go through `escapeHtml`; pages carry their own CSP and `no-store` |
 | `server/admin-cli.mjs` | `notify` resends any event except `partner.handoff` (no link to give; use `handoff`); `handoff` issues the claim token, prints the claim address, and retires the previous link; `claims` / `claim-revoke` inspect and retire links without reissuing; `suspend` / `retire` only send mail, the manifest status still follows the ops manifest |

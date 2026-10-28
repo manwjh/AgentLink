@@ -42,7 +42,9 @@ xknot.si/
 ├── server/
 │   ├── index.mjs          API process entry, listens only on 127.0.0.1:5181
 │   ├── app.mjs            routes, same-origin check, rate limiting, Cookie
-│   ├── store.mjs          SQLite: applications, state, claim tokens, send log, admins and sessions
+│   ├── store.mjs          opens the SQLite file, prepares the schema, assembles the domains below
+│   ├── store/             one file per domain: applications (+ provisioning runs), claim tokens, mail log,
+│   │                      admins and sessions, relay, members, settings; schema.mjs holds tables and migrations
 │   ├── validate.mjs       application form field validation (pure function)
 │   ├── manifest.mjs       application → instances.json entry, self-checks after generation
 │   ├── edit.mjs           console instance-config edits: whole-file validation then atomic write-back of both files

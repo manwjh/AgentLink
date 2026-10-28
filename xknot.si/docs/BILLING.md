@@ -223,8 +223,8 @@ incomplete ──▶ active ──▶ past_due ──▶ unpaid ──▶ cancel
 
 ## 7. Data
 
-`var/xknot.db`, added in `server/store.mjs` as inline `create table if not exists`. No migration
-framework.
+`var/xknot.db`, defined in `server/store/schema.mjs` as inline `create table if not exists`,
+plus numbered migrations gated by SQLite's `user_version`.
 
 | Table | Columns | Purpose |
 |------|------|------|

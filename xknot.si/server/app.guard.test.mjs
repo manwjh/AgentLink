@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import test from "node:test";
 
@@ -170,4 +171,56 @@ test("admin login: the per-account bucket uses the same normalization as the loo
   });
   assert.equal(blocked.status, 429, "换写法、换地址也还在同一个账号的桶里");
   assert.equal(blocked.data.error, "rate_limited");
+});
+
+// 路由是一串按顺序短路的 if，跳过靠的是「前面那条不命中」——这份顺序本身就是
+// 契约（/admin 必须先于 /api/ 前缀判断，同源检查必须先于所有 POST）。所以不把它
+// 改写成表。但顺序的代价是：同一条路径写两遍不会报错，第二条永远走不到；
+// 一条路径被误删也不会有人喊。
+//
+// 这一份把「有哪些路径」钉住：变动必须出现在 diff 里，重复必须炸。
+test("routes: the same path is not declared twice", () => {
+  const source = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  // 一条路径可以出现两次：GET 与 POST 各一个分支，或者「方法不对就 405」的兜底。
+  // 真正会变成死代码的是「同一路径、同一方法」写了两遍，所以按 (路径, 方法) 判重。
+  const declared = new Set();
+  for (const match of source.matchAll(/route === "([^"]+)"(.*)$/gm)) {
+    const [, path, rest] = match;
+    const methods = [...rest.matchAll(/method === "([A-Z]+)"/g)].map((item) => item[1]);
+    for (const method of methods.length ? methods : ["ANY"]) {
+      const key = `${method} ${path}`;
+      assert.equal(declared.has(key), false, `${key} is declared twice; the later branch is dead code`);
+      declared.add(key);
+    }
+  }
+});
+
+test("routes: the exact-match paths are the ones we reviewed", () => {
+  const source = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  // 同一路径可以出现两次（GET 与 POST、命中与 405），所以按集合比。
+  const paths = [...new Set([...source.matchAll(/route === "([^"]+)"/g)].map((match) => match[1]))].sort();
+
+  // 加路由时更新这一行；删路由时同样。它唯一的作用是让改动可见，
+  // 不代替任何行为测试——每一条路由的语义在 app.test.mjs 里各有用例。
+  assert.deepEqual(paths, [
+    "/api/admin/applications",
+    "/api/admin/hub/traffic",
+    "/api/admin/login",
+    "/api/admin/logout",
+    "/api/admin/mail",
+    "/api/admin/notify-log",
+    "/api/admin/overview",
+    "/api/admin/provision",
+    "/api/admin/session",
+    "/api/applications",
+    "/api/claim",
+    "/api/federation/mail",
+    "/api/health",
+    "/api/locations",
+    "/api/member/code",
+    "/api/member/logout",
+    "/api/member/session",
+    "/api/probes",
+    "/api/subdomains/check",
+  ]);
 });
