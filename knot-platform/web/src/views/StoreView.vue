@@ -423,7 +423,7 @@ stopOutboxWatch = watch(
           <img v-if="session.user?.avatarUrl" :src="session.user.avatarUrl" alt="" />
           <UserIcon v-else />
         </span>
-        <span class="share-pill">{{ session.user ? t("store.composePrompt") : t("store.login") }}</span>
+        <span class="store-compose-pill">{{ session.user ? t("store.composePrompt") : t("store.login") }}</span>
         <PlusIcon class="store-compose-icon" aria-hidden="true" />
       </button>
 

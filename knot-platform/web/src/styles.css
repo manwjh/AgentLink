@@ -1668,9 +1668,17 @@ textarea.share-input:focus {
   padding: 0.45rem 0.75rem;
 }
 
-button.intel-create[aria-pressed="true"],
-.intel-bounty[aria-pressed="true"] {
-  box-shadow: 0 0 0 2px var(--color-accent);
+/* 按下态画在卡片内侧：横滑视口按卡片边缘裁切，画在盒子外面的描边
+   在左侧第一张（以及滚到尽头的最后一张）只留得下圆角，竖边会被切掉。 */
+button.intel-create[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  border: 2px solid var(--color-accent);
+  border-radius: inherit;
+  pointer-events: none;
 }
 
 @media (max-width: 720px) {
@@ -1850,81 +1858,6 @@ button.intel-create:hover:not(:disabled) {
   font-weight: 700;
   line-height: 1;
   text-align: center;
-}
-
-a.intel-bounty,
-a.intel-bounty:hover {
-  color: inherit;
-  text-decoration: none;
-}
-
-.intel-bounty {
-  display: flex;
-  flex-direction: column;
-  flex: 0 0 var(--story-width);
-  width: var(--story-width);
-  height: var(--story-height);
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 12px;
-  overflow: hidden;
-  scroll-snap-align: start;
-  background: #ffffff;
-  box-shadow: var(--shadow-card);
-  box-sizing: border-box;
-  color: inherit;
-  font: inherit;
-  text-align: center;
-  cursor: pointer;
-}
-
-.intel-bounty-body {
-  box-sizing: border-box;
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  height: auto;
-  margin: 0;
-  padding: 0.7rem 0.45rem 0.35rem;
-  background: #0866ff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.intel-bounty-text {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
-  overflow: hidden;
-  color: #ffffff;
-  font-size: 0.84rem;
-  font-weight: 600;
-  line-height: 1.35;
-  text-align: center;
-}
-
-.intel-bounty-reward {
-  position: relative;
-  box-sizing: border-box;
-  flex: 0 0 auto;
-  min-height: 2.25rem;
-  margin: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.28rem;
-  padding: 0 0.35rem;
-  background: #ffffff;
-  color: var(--color-text);
-  font-size: 0.84rem;
-  font-weight: 700;
-  line-height: 1;
 }
 
 /* 最近活跃用户：与情报横滑条同一套尺寸 */
@@ -2562,24 +2495,6 @@ a.intel-person:hover {
   .intel-photo-frame {
     height: 300px;
   }
-}
-
-.bounty-reply-meta {
-  margin: 0;
-  color: var(--color-muted);
-  font-size: 0.82rem;
-  line-height: 1.35;
-}
-
-.bounty-reply-body {
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-/* 父级裁掉盒子外的 outline，焦点框只剩内侧两条边，改成向内画。 */
-
-.bounty-reply-meta .actor-mark {
-  margin-right: 0.2rem;
 }
 
 .chat-pending {
@@ -4930,6 +4845,35 @@ body.is-lightbox {
   font: inherit;
   color: inherit;
   cursor: pointer;
+  /* 分享框改成多行输入后是顶部对齐、头像带下移；这一行仍是单行，回到居中。 */
+  align-items: center;
+}
+
+.store-compose .share-avatar {
+  margin-top: 0;
+}
+
+/* 收起时的那一行提示。分享框的胶囊随多行输入一起撤了，这里按原来的样子单独写：
+   上架卡还是单行，不该跟着变。 */
+.store-compose-pill {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 2.5rem;
+  display: flex;
+  align-items: center;
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-muted);
+  font-size: 1.05rem;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.store-compose .share-prompt:hover .store-compose-pill {
+  background: #e4e6eb;
 }
 
 .store-compose-icon {
