@@ -38,6 +38,17 @@ export const SHRINK_ATTEMPTS = Object.freeze([
   { edge: 1280, quality: 0.7 },
 ]);
 
+// 粘贴进来的截图基本都是 PNG：一张 1–3MB，而卡片显示图只有 1280px。
+// 这条路径不按体积触发，一律转 JPEG，所以第一档质量比普通压缩高一点，
+// 免得截图里的文字先糊掉；收不住再按同样的顺序降。
+export const FORCE_JPEG_ATTEMPTS = Object.freeze([
+  { edge: 2048, quality: 0.92 },
+  { edge: 2048, quality: 0.85 },
+  { edge: 2048, quality: 0.75 },
+  { edge: 1600, quality: 0.72 },
+  { edge: 1280, quality: 0.7 },
+]);
+
 /**
  * 按长边等比缩放。`scale` 恒 ≤ 1：只缩不放。
  * 只依赖长边，所以 EXIF 方向把宽高对调时结论不变——这是这里不读方向的原因。
@@ -85,6 +96,8 @@ export function asJpegFile(blob, originalName) {
 // 会动的格式不重编码：canvas 只解第一帧，压一次就把动画变成静图。
 // 只有超过实例上限时才动它们——那时不压就发不出去，留一帧也好过被拒。
 const ANIMATABLE_TYPE = /^image\/(gif|webp|avif)$/i;
+// 已经是 JPEG 的图不再有损重编码一次：压不出多少体积，画质却白掉一档。
+const JPEG_TYPE = /^image\/jpeg$/i;
 // SVG 不转：平台本来就不收 SVG，转成 JPEG 反而把一份本该被拒的矢量图送过服务端。
 // 交给后端按 bad_mime 拒绝，规则只有一处。
 const VECTOR_TYPE = /^image\/svg\+xml$/i;
@@ -92,9 +105,11 @@ const VECTOR_TYPE = /^image\/svg\+xml$/i;
 /**
  * 把过大的图片压到实例上限以内。
  *
+ * `forceJpeg` 用于剪贴板粘贴：不看体积，一律落到 JPEG（已经够小的 JPEG 除外）。
+ *
  * 任何一步失败都返回原文件：压不动不能变成发不出去，最终由后端按体积和格式判定。
  * @param {File|Blob} file 已经过 HEIC/HEIF 转换的文件
- * @param {{ maxBytes?: number, targetBytes?: number, attempts?: Array<{edge:number,quality:number}> }} [options]
+ * @param {{ maxBytes?: number, targetBytes?: number, forceJpeg?: boolean, attempts?: Array<{edge:number,quality:number}> }} [options]
  * @param {{ decode?: Function, encode?: Function, asFile?: Function }} [deps] 测试注入用
  * @returns {Promise<{ file: File|Blob, shrunk: boolean }>}
  */
@@ -107,11 +122,24 @@ export async function shrinkImage(file, options = {}, deps = {}) {
     Number(options.targetBytes) > 0 ? Number(options.targetBytes) : SHRINK_TARGET_BYTES,
     maxBytes
   );
-  const attempts = Array.isArray(options.attempts) && options.attempts.length ? options.attempts : SHRINK_ATTEMPTS;
-  // 动图在没超上限时保持原样：体积换不来把动画压丢的代价。
-  if (ANIMATABLE_TYPE.test(String(file.type || "")) && file.size <= maxBytes) return { file, shrunk: false };
-  if (VECTOR_TYPE.test(String(file.type || ""))) return { file, shrunk: false };
-  if (!shouldShrink(file.size, maxBytes)) return { file, shrunk: false };
+  const forced = options.forceJpeg === true;
+  const attempts = Array.isArray(options.attempts) && options.attempts.length
+    ? options.attempts
+    : forced
+      ? FORCE_JPEG_ATTEMPTS
+      : SHRINK_ATTEMPTS;
+  const type = String(file.type || "");
+  // 矢量图转位图会把本该被后端拒绝的文件洗成合格上传，两种情况都不碰。
+  if (VECTOR_TYPE.test(type)) return { file, shrunk: false };
+  if (forced) {
+    // 剪贴板里本来就是 JPEG、又没超上限：只可能是从别处复制的照片，
+    // 再编码一次只掉画质，省不下体积。
+    if (JPEG_TYPE.test(type) && file.size <= maxBytes) return { file, shrunk: false };
+  } else {
+    // 动图在没超上限时保持原样：体积换不来把动画压丢的代价。
+    if (ANIMATABLE_TYPE.test(type) && file.size <= maxBytes) return { file, shrunk: false };
+    if (!shouldShrink(file.size, maxBytes)) return { file, shrunk: false };
+  }
 
   const decode = deps.decode || decodeBitmap;
   const encode = deps.encode || encodeCanvas;
@@ -165,8 +193,10 @@ export async function shrinkImage(file, options = {}, deps = {}) {
     }
 
     if (!best) return { file, shrunk: false };
-    // 压完不比原图小（源图本来就压得很紧）：保留原件，不为更差的结果重编码。
-    if (best.size >= file.size) return { file, shrunk: false };
+    // 普通路径：压完不比原图小（源图本来就压得很紧），保留原件，不为更差的结果重编码。
+    // 粘贴路径例外：那里要的是「一定是 JPEG」，纯色截图压成 JPEG 反而更大也照转——
+    // 否则同一个粘贴动作有时出 .jpg、有时出 .png，名字和类型跟着变的正是用户看到的那一份。
+    if (!forced && best.size >= file.size) return { file, shrunk: false };
     return { file: makeFile(best, file.name), shrunk: true };
   } finally {
     try {

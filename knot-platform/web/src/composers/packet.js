@@ -237,18 +237,22 @@ export function usePacketMedia(policyOf = () => ({}), options = {}) {
 
   // 先转格式（HEIC → JPEG），再按体积决定要不要缩：超过实例上限或体积偏大的
   // 先在浏览器里压到上限以内，用户看到的是「传上去了」，不再是一句「不能超过 N MB」。
+  // 粘贴路径带 forceJpeg：不看体积，一律落到 JPEG。
   // 压不动（浏览器解不了、内存不够）时退回原文件，交给后端按体积与格式判定。
   // 这里连「抛异常」也一起收掉：一张图出意外不该让整批（最多九张）停在半路，
   // 更不该变成一次没人接的 rejection——界面上什么都看不到。
   // 超限与否交回调用方：这一代如果已经作废，就不该再往界面上写错误。
-  async function prepareImage(file) {
+  async function prepareImage(file, options = {}) {
     const limit = imageLimit();
     try {
       // 超时要包住整条链：HEIC 转码（WASM）与解码编码都可能卡住，不只是后半段。
       const prepared = await withTimeout(
         (async () => {
           const normalized = await normalizeImageFile(file);
-          const { file: shrunk } = await shrinkImage(normalized, { maxBytes: limit });
+          const { file: shrunk } = await shrinkImage(normalized, {
+            maxBytes: limit,
+            forceJpeg: options.forceJpeg === true,
+          });
           return shrunk;
         })(),
         prepareTimeoutMs
@@ -261,20 +265,24 @@ export function usePacketMedia(policyOf = () => ({}), options = {}) {
     }
   }
 
-  async function addImages(list) {
+  async function addImages(list, options = {}) {
     const token = generation;
     error.value = "";
     preparing.value += 1;
     try {
       for (const file of list) {
         if (token !== generation) break;
-        if (images.value.length >= MAX_IMAGES) break;
+        if (images.value.length >= MAX_IMAGES) {
+          // 静默丢弃会让「粘贴了 12 张」看起来只进去了 9 张却不说原因。
+          error.value = t("error.image_too_many", { max: MAX_IMAGES });
+          break;
+        }
         // 选错了文件时给一句话，不静默跳过——静默跳过的结果就是「点了没反应」。
         if (!looksLikeImage(file)) {
           error.value = t("error.bad_mime");
           continue;
         }
-        const prepared = await prepareImage(file);
+        const prepared = await prepareImage(file, options);
         if (token !== generation) break;
         if (prepared.tooLarge) {
           error.value = t("error.image_too_large");
@@ -282,7 +290,10 @@ export function usePacketMedia(policyOf = () => ({}), options = {}) {
         }
         // 压缩要等，这期间用户可能又选了一批，也可能删掉了其中一张。
         // 所以每轮都读当前数组再追加，不拿进入函数时的快照——否则后一次会覆盖前一次。
-        if (images.value.length >= MAX_IMAGES) break;
+        if (images.value.length >= MAX_IMAGES) {
+          error.value = t("error.image_too_many", { max: MAX_IMAGES });
+          break;
+        }
         images.value = [...images.value, prepared.file];
         // 逐张出预览：九张原图解码再编码要一两秒，等全部压完才显示，看起来像是卡住了。
         // 只追加新的那条，不重算已有预览——重算会撤销正在显示的 blob 地址。

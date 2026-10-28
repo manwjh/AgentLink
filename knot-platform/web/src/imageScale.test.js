@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  FORCE_JPEG_ATTEMPTS,
   IMAGE_MAX_BYTES_FALLBACK,
   SHRINK_MAX_PIXELS,
   SHRINK_TARGET_BYTES,
@@ -263,4 +264,65 @@ test("an absurd pixel count is not decoded twice over", async () => {
   assert.equal(result.file, file);
   assert.equal(encoded, false);
   assert.ok(20000 * 20000 > SHRINK_MAX_PIXELS);
+});
+
+test("a pasted screenshot is re-encoded even when it is under the trigger", async () => {
+  const png = fileOf(300 * 1024, "image.png", "image/png");
+  const calls = [];
+  const result = await shrinkImage(
+    png,
+    { forceJpeg: true },
+    {
+      decode: async () => fakeBitmap(2560, 1440),
+      encode: async (_bitmap, size, quality) => {
+        calls.push({ edge: Math.max(size.width, size.height), quality });
+        return blobOf(140 * 1024);
+      },
+    }
+  );
+  assert.equal(result.shrunk, true);
+  // 第一档就够小，不继续降质量；质量从 0.92 起，截图文字没那么容易糊。
+  assert.deepEqual(calls, [{ edge: 2048, quality: FORCE_JPEG_ATTEMPTS[0].quality }]);
+  assert.equal(result.file.type, "image/jpeg");
+  assert.equal(result.file.name, "image.jpg");
+});
+
+test("a small jpeg from the clipboard is not re-encoded a second time", async () => {
+  const jpeg = fileOf(200 * 1024, "photo.jpg");
+  let decoded = false;
+  const result = await shrinkImage(jpeg, { forceJpeg: true }, {
+    decode: async () => {
+      decoded = true;
+      return fakeBitmap(1200, 900);
+    },
+  });
+  assert.equal(result.file, jpeg);
+  assert.equal(result.shrunk, false);
+  assert.equal(decoded, false);
+});
+
+test("a forced conversion lands on jpeg even when the jpeg is bigger", async () => {
+  const png = fileOf(120 * 1024, "flat.png", "image/png");
+  const result = await shrinkImage(png, { forceJpeg: true }, {
+    decode: async () => fakeBitmap(800, 600),
+    encode: async () => blobOf(200 * 1024),
+  });
+  // 粘贴路径承诺的是「一定是 JPEG」：纯色截图的 PNG 比 JPEG 小也照转，
+  // 否则同一个动作会时而交 .jpg、时而交 .png。
+  assert.equal(result.file.type, "image/jpeg");
+  assert.equal(result.file.name, "flat.jpg");
+  assert.equal(result.shrunk, true);
+});
+
+test("a vector file is never rasterized even on the paste path", async () => {
+  const svg = fileOf(300 * 1024, "logo.svg", "image/svg+xml");
+  let decoded = false;
+  const result = await shrinkImage(svg, { forceJpeg: true }, {
+    decode: async () => {
+      decoded = true;
+      return fakeBitmap(800, 600);
+    },
+  });
+  assert.equal(result.file, svg);
+  assert.equal(decoded, false);
 });

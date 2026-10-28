@@ -1183,9 +1183,18 @@ body:has(.release-note) .search-sheet {
   min-width: 0;
 }
 
+.share-form {
+  min-width: 0;
+}
+
+.share-body-wrap {
+  position: relative;
+  min-width: 0;
+}
+
 .share-prompt {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.65rem;
   width: 100%;
   min-width: 0;
@@ -1199,6 +1208,8 @@ body:has(.release-note) .search-sheet {
   width: 2.5rem;
   height: 2.5rem;
   flex: 0 0 2.5rem;
+  /* 输入长高时头像留在第一行，不跟着整块垂直居中。 */
+  margin-top: 0.2rem;
   border-radius: 50%;
   overflow: hidden;
   background: #e4e6eb;
@@ -1229,50 +1240,36 @@ body:has(.release-note) .search-sheet {
   background: transparent;
 }
 
-.share-pill {
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 2.5rem;
-  display: flex;
-  align-items: center;
-  padding: 0 0.9rem;
-  border-radius: 999px;
-  background: var(--color-bg);
-  color: var(--color-muted);
-  font-size: 1.05rem;
-  line-height: 1.2;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.share-prompt:hover .share-pill,
-.share-prompt input.share-pill-input:hover {
+.share-prompt:hover .share-body:not(:disabled) {
   background: #e4e6eb;
 }
 
-.share-prompt input.share-pill-input {
+/* 多行输入：高度由 autoGrow.js 按 scrollHeight 写回，max-height 在这里夹住。 */
+.share-body {
   flex: 1 1 auto;
   width: auto;
   min-width: 0;
-  height: 2.5rem;
-  min-height: 2.5rem;
+  min-height: 2.75rem;
+  max-height: min(45vh, 12.6em);
   margin: 0;
-  padding: 0 0.9rem;
+  padding: 0.5rem 0.9rem;
   border: 0;
-  border-radius: 999px;
+  border-radius: 1.1rem;
   background: var(--color-bg);
   color: var(--color-text);
+  font: inherit;
   font-size: 1.05rem;
-  line-height: 1.2;
+  line-height: 1.5;
+  resize: none;
+  overflow-y: auto;
   box-shadow: none;
 }
 
-.share-prompt input.share-pill-input::placeholder {
+.share-body::placeholder {
   color: var(--color-muted);
 }
 
-.share-prompt input.share-pill-input:focus {
+.share-body:focus {
   border: 0;
   background: var(--color-bg);
   box-shadow: none;
@@ -1284,7 +1281,7 @@ body:has(.release-note) .search-sheet {
 .share-actions {
   display: flex;
   flex-wrap: nowrap;
-  align-items: stretch;
+  align-items: center;
   gap: 0.25rem;
   margin-top: 0.35rem;
   padding-top: 0.2rem;
@@ -1336,13 +1333,12 @@ body:has(.release-note) .search-sheet {
   color: #c47b00;
 }
 
-.share-action-file,
-.share-action-mention {
+.share-action-file {
   color: var(--color-accent);
 }
 
 .mention-box {
-  position: relative;
+  position: static;
   margin-top: 0.45rem;
 }
 
@@ -1386,8 +1382,14 @@ body:has(.release-note) .search-sheet {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 
-.mention-option,
-.mention-trigger {
+/* 浮在光标所在行的下方：不推挤输入框和媒体区，位置由 MentionPicker 量出来。 */
+.mention-menu.is-floating {
+  position: absolute;
+  z-index: 30;
+  margin: 0;
+}
+
+.mention-option {
   display: flex;
   align-items: center;
   gap: 0.55rem;
@@ -1402,19 +1404,9 @@ body:has(.release-note) .search-sheet {
   text-align: left;
 }
 
-.mention-trigger {
-  width: auto;
-  color: var(--color-accent);
-}
-
-.mention-option:hover:not(:disabled),
-.mention-trigger:hover:not(:disabled) {
+.mention-option.is-active,
+.mention-option:hover:not(:disabled) {
   background: var(--color-bg);
-}
-
-.mention-empty {
-  padding: 0.65rem 0.55rem;
-  color: var(--color-muted);
 }
 
 .mention-avatar {
@@ -1444,6 +1436,11 @@ body:has(.release-note) .search-sheet {
   overflow: hidden;
   line-height: 1.5;
   resize: none;
+}
+
+.share-consent-row {
+  /* 同意声明放在工具条上方：它是发送的前置条件，和发布键分开一行才读得顺。 */
+  margin-top: 0.5rem;
 }
 
 .share-consent {
@@ -1485,6 +1482,8 @@ body:has(.release-note) .search-sheet {
 
 /* 发布键：主色实心，和顶栏的图标键区分开。 */
 .share-send.btn-icon {
+  margin-left: auto;
+  flex: 0 0 auto;
   background: var(--color-accent);
   color: #ffffff;
 }
@@ -1562,6 +1561,48 @@ textarea.share-input:focus {
   top: 0.35rem;
   right: 0.35rem;
   background: rgba(255, 255, 255, 0.92);
+}
+
+/* 压缩要等，空着会让人以为没粘上：占一格写「处理中」，压完就地换成预览。 */
+.share-photo.is-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  text-align: center;
+}
+
+/* 中段：已插入的内容。空的时候整块不渲染，不占位置。 */
+.composer-media {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+/* 照片格自带的下边距是给表单的纵向节奏用的，这里由中段的 gap 接管。 */
+.composer-media .share-photos {
+  margin-bottom: 0;
+}
+
+.composer-video {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.composer-video .share-video {
+  margin-bottom: 0;
+}
+
+.composer-video-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .share-public {
@@ -1685,14 +1726,11 @@ button.intel-create:focus-visible::after {
 }
 
 @media (max-width: 720px) {
-  .share-pill,
-  .share-prompt input.share-pill-input,
   .share-action {
     min-height: 44px;
   }
 
-  .share-prompt input.share-pill-input {
-    height: 44px;
+  .share-body {
     min-height: 44px;
   }
 }
@@ -2309,15 +2347,17 @@ a.intel-person:hover {
   overflow: hidden;
 }
 
+/* 正文浮在照片上部，暗角跟着翻到上面：白字压在亮图上也能读清。
+   前 9rem 保持一个较平的深色，正文长到上限也在里面，之后才淡出。 */
 .intel-photo-frame.has-photo::after {
   content: "";
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  top: 0;
   z-index: 1;
-  height: 7.5rem;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+  height: 13rem;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.48) 9rem, rgba(0, 0, 0, 0) 13rem);
   pointer-events: none;
 }
 
@@ -2352,54 +2392,84 @@ a.intel-person:hover {
   cursor: not-allowed;
 }
 
+/* 预览 + 浮在它上面的正文共用一块定位区：正文停在照片上部，
+   多行时往下长，不跟着图片一起被裁掉。 */
+.intel-photo-stage {
+  position: relative;
+}
+
+/* 这张卡为了取景框通铺没有左右内边距，好友浮层和胶囊按工具条的 1rem 对齐。 */
+.intel-compose .mention-box {
+  padding: 0 1rem;
+}
+
+/* 停在照片上部而不是底边：贴完图视线还在图上，手机上不必先往下滑。
+   top 让开顶角那两枚圆形键（关闭、移除）。 */
 .intel-photo-caption {
   position: absolute;
   z-index: 2;
+  top: 4rem;
   left: 0.85rem;
   right: 0.85rem;
-  bottom: 0.85rem;
 }
 
-.intel-photo-caption input[type="text"],
-
-.intel-photo-draft input[type="text"] {
-  margin: 0;
-  font-family: inherit;
-}
-
-.intel-photo-caption input[type="text"] {
-  width: 100%;
-  min-height: 44px;
-  padding: 0 0.95rem;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
-  font-size: 0.95rem;
-  color: var(--color-text);
-}
-
-.intel-photo-caption input[type="text"]:focus {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
-}
-
-.intel-photo-draft {
+/* 还没拍照时没有东西可浮，正文落在取景框下面。 */
+.intel-photo-caption.is-draft {
+  position: static;
   padding: 0.85rem 1rem 0;
 }
 
-.intel-photo-draft input[type="text"] {
+/* 多行：高度由 autoGrow.js 按 scrollHeight 写回，到 6 行左右在框内滚动。
+   选择器要比 `.composer-dialog textarea` 更具体，否则会退回那条 6rem 高的通用正文样式。
+   压在照片上时不画底和边，只留字和一层阴影；照片的暗角由取景框自己铺。 */
+.intel-photo-caption .intel-photo-caption-input {
+  display: block;
   width: 100%;
   min-height: 44px;
-  padding: 0 0.95rem;
-  border: 1px solid var(--color-border-dim);
-  border-radius: 999px;
-  background: #ffffff;
+  max-height: 8.4em;
+  margin: 0;
+  padding: 0.65rem 0.95rem;
+  border: 0;
+  border-radius: 1.1rem;
+  background: transparent;
+  box-shadow: none;
+  color: #ffffff;
+  caret-color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+  font-family: inherit;
   font-size: 0.95rem;
+  line-height: 1.4;
+  resize: none;
+  overflow-y: auto;
 }
 
-.intel-photo-draft input[type="text"]:focus {
+.intel-photo-caption .intel-photo-caption-input::placeholder {
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+}
+
+.intel-photo-caption .intel-photo-caption-input:focus {
+  border: 0;
+  box-shadow: none;
+  outline: 2px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 2px;
+}
+
+.intel-photo-caption.is-draft .intel-photo-caption-input {
+  border: 1px solid var(--color-border-dim);
+  background: #ffffff;
+  color: var(--color-text);
+  caret-color: auto;
+  text-shadow: none;
+  box-shadow: none;
+}
+
+.intel-photo-caption.is-draft .intel-photo-caption-input::placeholder {
+  color: var(--color-muted);
+  text-shadow: none;
+}
+
+.intel-photo-caption.is-draft .intel-photo-caption-input:focus {
   border-color: var(--color-accent);
   box-shadow: none;
   outline: 2px solid var(--color-accent);
