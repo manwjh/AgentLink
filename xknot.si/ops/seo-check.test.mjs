@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { escapeHtml, renderDirectoryPage, renderRobots, renderSitemap } from "./build-seo.mjs";
+import { escapeHtml, injectBoot, renderBoot, renderDirectoryPage, renderRobots, renderSitemap } from "./build-seo.mjs";
 import { LOCALES } from "../web/src/lib/i18n.js";
 import {
   canonicalOf,
@@ -19,13 +19,22 @@ import {
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".xml": "application/xml" };
 
-// 一份「本来应该长这样」的站点：入口页带上 canonical、hreflang、标题与描述，
+const BOOT_CATALOGS = {
+  en: { hero: { wordmark: "XKNOT", name: "FEDERATION" }, portal: { tagline: "A decentralized information network." } },
+  "zh-CN": { hero: { wordmark: "XKNOT", name: "联邦" }, portal: { tagline: "去中心化的信息网络。" } },
+  "zh-TW": { hero: { wordmark: "XKNOT", name: "聯邦" }, portal: { tagline: "去中心化的資訊網路。" } },
+};
+
+// 一份「本来应该长这样」的站点：入口页带上首屏刊头、canonical、hreflang、标题与描述，
 // 目录页与 robots / sitemap 直接用构建时的同一段代码生成，测的才是真产物。
-function homeHtml(origin, locale, { noindex = false, canonical = null } = {}) {
+function homeHtml(origin, locale, { noindex = false, canonical = null, noBoot = false } = {}) {
   const alternates = LOCALES.map(
     (item) => `    <link rel="alternate" hreflang="${item}" href="${origin}/${item}/" />`,
   );
   alternates.push(`    <link rel="alternate" hreflang="x-default" href="${origin}/${LOCALES[0]}/" />`);
+  const app = noBoot
+    ? '<div id="app"></div>'
+    : injectBoot('<div id="app"></div>', renderBoot({ locale, catalog: BOOT_CATALOGS[locale] })).trim();
   return [
     "<!doctype html>",
     `<html lang="${locale}">`,
@@ -37,7 +46,7 @@ function homeHtml(origin, locale, { noindex = false, canonical = null } = {}) {
     `    <link rel="canonical" href="${canonical || `${origin}/${locale}/`}" />`,
     ...alternates,
     "  </head>",
-    '  <body><div id="app"></div></body>',
+    `  <body>${app}</body>`,
     "</html>",
   ].join("\n");
 }
@@ -122,6 +131,15 @@ test("seo-check：canonical 指错、带 noindex、robots 缺 sitemap 都被指�
   assert.match(text, /\/en\/：canonical/);
   assert.match(text, /\/zh-CN\/：带 noindex/);
   assert.match(text, /\/robots.txt：缺少指向 sitemap\.xml/);
+});
+
+test("seo-check：首屏刊头没写进 HTML 时算不通过（空壳要等脚本）", async (t) => {
+  const dir = writeSite("https://example.test", { homes: { en: { noBoot: true } } });
+  const origin = await serve(t, dir);
+  const result = await seoCheck({ origin: "https://example.test", fetchText: (url) => fetchTo(origin, url) });
+  assert.match(result.problems.join("\n"), /\/en\/：首屏刊头没有写进 HTML/);
+  // 另外两个语种照常通过：只报缺的那一份。
+  assert.doesNotMatch(result.problems.join("\n"), /\/zh-CN\/：首屏刊头/);
 });
 
 test("seo-check：sitemap 里的死链与站外地址都算不通过", async (t) => {

@@ -3,17 +3,21 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { LOCALES } from "../web/src/lib/i18n.js";
 import {
   DEFAULT_ORIGIN,
   VERIFY_ENGINES,
   directoryInstances,
+  injectBoot,
   injectDirectoryFallback,
   injectVerification,
   normalizeOrigin,
   normalizeVerify,
   readVerifyFile,
+  BOOT_STYLE,
+  renderBoot,
   renderDirectoryFallback,
   renderDirectoryPage,
   renderRobots,
@@ -165,6 +169,104 @@ test("首页摘要只有一段，重复注入不会叠加", () => {
   assert.match(twice, /https:\/\/wang\.xknot\.si/);
 });
 
+// 首屏文案：本语种优先，缺条目退回英文，与页面上 makeT 的回退链一致。
+const BOOT_CATALOGS = {
+  en: {
+    hero: {
+      wordmark: "XKNOT",
+      name: "FEDERATION",
+      eyebrow: "DISTRIBUTED NETWORK",
+      protocol: "FEDERATION PROTOCOL v1.0",
+      summary: "A read-only hub.",
+    },
+    portal: { tagline: "A decentralized information network." },
+    directory: { link: "Instance directory", title: "Instance directory — XKnot Federation" },
+    status: { up: "Operational" },
+  },
+  "zh-CN": {
+    hero: { wordmark: "XKNOT", name: "联邦", eyebrow: "分布式网络", summary: "中枢只读。" },
+    portal: { tagline: "去中心化的信息网络。" },
+  },
+  "zh-TW": { hero: { wordmark: "XKNOT", name: "聯邦" } },
+};
+
+test("首屏刊头用本语种词条，缺条目退回英文", () => {
+  const zh = renderBoot({ locale: "zh-CN", catalog: BOOT_CATALOGS["zh-CN"], fallback: BOOT_CATALOGS.en });
+  assert.match(zh, /<span class="boot-name">联邦<\/span>/);
+  assert.match(zh, /去中心化的信息网络。/);
+  assert.match(zh, /中枢只读。/);
+  assert.doesNotMatch(zh, /A decentralized information network\./);
+
+  // 繁体只登记了标题：其余条目按回退链取英文，不留空标签。
+  const tw = renderBoot({ locale: "zh-TW", catalog: BOOT_CATALOGS["zh-TW"], fallback: BOOT_CATALOGS.en });
+  assert.match(tw, /<span class="boot-name">聯邦<\/span>/);
+  assert.match(tw, /A decentralized information network\./);
+
+  // 一条文案都没有就不写：半截刊头比空壳更难读。
+  assert.equal(renderBoot({ locale: "en", catalog: {} }), "");
+  assert.throws(() => renderBoot({ locale: "fr", catalog: BOOT_CATALOGS.en }), /未登记的语种/);
+});
+
+test("首屏刊头转义文案，不把标签拼进页面", () => {
+  const boot = renderBoot({
+    locale: "en",
+    catalog: { hero: { wordmark: "</h1><script>alert(1)</script>" }, portal: { tagline: "a & b" } },
+  });
+  assert.doesNotMatch(boot, /<script>alert\(1\)<\/script>/);
+  assert.match(boot, /&lt;\/h1&gt;&lt;script&gt;/);
+  assert.match(boot, /a &amp; b/);
+});
+
+test("首屏写进 #app，重复注入不叠加，撤掉后不留样式", () => {
+  const html = '<!doctype html><html><body><div id="app"></div></body></html>';
+  const boot = renderBoot({ locale: "en", catalog: BOOT_CATALOGS.en });
+  const once = injectBoot(html, boot);
+  assert.match(once, /<div id="app">\n<!-- knot-boot -->/);
+  assert.equal(once.match(/<!-- knot-boot -->/g).length, 1);
+  assert.equal(injectBoot(once, boot), once);
+  // 样式跟着这一块走：撤掉首屏时一起消失，不在主样式之外留副本。
+  const removed = injectBoot(once, "");
+  assert.doesNotMatch(removed, /knot-boot/);
+  assert.doesNotMatch(removed, /boot-mast/);
+  assert.throws(() => injectBoot("<html><body></body></html>", boot), /id="app"/);
+});
+
+test("首屏样式与 App.vue 里的刊头同步：改了组件样式没跟过来就会失败", () => {
+  const app = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "web", "src", "App.vue"),
+    "utf8",
+  );
+  const ruleOf = (css, selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(css);
+    return match ? match[1] : "";
+  };
+  const propsOf = (block, props) => {
+    const out = {};
+    for (const prop of props) {
+      const match = new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*([^;]+)`).exec(block);
+      if (match) out[prop] = match[1].replace(/\s+/g, " ").trim();
+    }
+    return out;
+  };
+
+  // 首屏刊头是组件刊头的静态副本：这几条决定文字的位置与字号，
+  // 对不上就等于挂载时跳一次版，所以逐条比。
+  const pairs = [
+    [".wordmark", ".boot-wordmark", ["font-family", "font-size", "font-weight", "line-height", "letter-spacing"]],
+    [".name-outline", ".boot-name", ["font-family", "font-size", "font-weight", "letter-spacing"]],
+    [".lede", ".boot-lede", ["max-width", "font-size", "line-height"]],
+    [".mast-note", ".boot-note", ["max-width", "font-size", "line-height"]],
+    [".eyebrow", ".boot-eyebrow", ["display", "gap", "flex-wrap", "font-family", "font-size", "letter-spacing"]],
+    [".mast-copy", ".boot-mast", ["display", "flex-direction", "gap"]],
+  ];
+  for (const [appSelector, bootSelector, props] of pairs) {
+    const appRule = propsOf(ruleOf(app, appSelector), props);
+    const bootRule = propsOf(ruleOf(BOOT_STYLE, bootSelector), props);
+    assert.deepEqual(bootRule, appRule, `${bootSelector} 与 App.vue 的 ${appSelector} 不一致：同步改 BOOT_STYLE`);
+  }
+});
+
 test("origin 只接受 http/https 绝对地址", () => {
   assert.equal(normalizeOrigin("https://xknot.si///"), "https://xknot.si");
   assert.throws(() => normalizeOrigin("xknot.si"), /绝对地址/);
@@ -308,6 +410,38 @@ test("writeSeo 把验证 meta 写进根路径、语种入口与目录页", () =>
 
     writeSeo({ distDir: dist, origin: "https://example.test", catalogs: CATALOGS, verify: {} });
     assert.doesNotMatch(readFileSync(path.join(dist, "en", "index.html"), "utf8"), /knot-verify/);
+  } finally {
+    rmSync(dist, { recursive: true, force: true });
+  }
+});
+
+test("writeSeo 把首屏写进三个语种入口，重复构建不叠加", () => {
+  const dist = mkdtempSync(path.join(tmpdir(), "xknot-seo-boot-"));
+  try {
+    mkdirSync(path.join(dist, "data"), { recursive: true });
+    writeFileSync(path.join(dist, "data", "hub.json"), JSON.stringify(SAMPLE));
+    for (const locale of LOCALES) {
+      mkdirSync(path.join(dist, locale), { recursive: true });
+      writeFileSync(
+        path.join(dist, locale, "index.html"),
+        '<!doctype html><html><body><div id="app"></div></body></html>',
+      );
+    }
+
+    writeSeo({ distDir: dist, origin: "https://example.test", catalogs: BOOT_CATALOGS });
+    const zh = readFileSync(path.join(dist, "zh-CN", "index.html"), "utf8");
+    assert.equal(zh.match(/<!-- knot-boot -->/g).length, 1);
+    assert.match(zh, /去中心化的信息网络。/);
+    // 三处注入各用一对标记：首屏、目录摘要、验证 meta 互不覆盖。
+    assert.equal(zh.match(/<!-- knot-directory -->/g).length, 1);
+    const en = readFileSync(path.join(dist, "en", "index.html"), "utf8");
+    assert.match(en, /<h1 class="boot-h1">/);
+    assert.match(en, /A decentralized information network\./);
+
+    writeSeo({ distDir: dist, origin: "https://example.test", catalogs: BOOT_CATALOGS });
+    const twice = readFileSync(path.join(dist, "zh-CN", "index.html"), "utf8");
+    assert.equal(twice.match(/<!-- knot-boot -->/g).length, 1);
+    assert.equal(twice.match(/<style>/g).length, 1, "首屏样式不能叠加");
   } finally {
     rmSync(dist, { recursive: true, force: true });
   }

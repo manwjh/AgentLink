@@ -5,12 +5,17 @@
 // 爬虫能看到目录，不执行 JS 的抓取与 Agent 只看得到标题。这里把目录再写一份
 // 纯静态的 HTML：每个实例一个链接、一句话介绍和标签，不需要脚本就能读。
 //
+// 首页的首屏文案同理：标题、一句话定位与那行说明本来都要等 JS 才出现，
+// 于是首屏最大的一块内容（LCP）实际是在等脚本，抓到的是空壳。这里把刊头
+// 写进 #app，脚本挂载时整块替换——不跑 JS 也能读到正文，跑 JS 也不会两遍。
+//
 // 产物（都在 dist 内）：
 //   robots.txt               放行页面，挡住接口与控制台，指向 sitemap
 //   sitemap.xml              三个语种入口、三份实例目录与 /knot-help
 //   <locale>/instances/index.html
 //                            无脚本的实例目录
-//   <locale>/index.html      在 </body> 前补一段 <noscript> 目录摘要
+//   <locale>/index.html      把首屏刊头写进 #app，并在 </body> 前补一段
+//                            <noscript> 目录摘要
 //
 // 目录内容来自 dist/data/hub.json（由 build-hub-data.mjs 写出），和门户看到的是
 // 同一份数据；隐藏的实例（health.hidden）与非法地址不列，避免把死链交给爬虫。
@@ -22,7 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { LOCALES } from "../web/src/lib/i18n.js";
+import { LOCALES, translate } from "../web/src/lib/i18n.js";
 import { invokedDirectly } from "./lib/main-module.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -31,6 +36,9 @@ export const DEFAULT_ORIGIN = "https://xknot.si";
 
 const MARK_START = "<!-- knot-directory -->";
 const MARK_END = "<!-- /knot-directory -->";
+
+const BOOT_START = "<!-- knot-boot -->";
+const BOOT_END = "<!-- /knot-boot -->";
 
 const VERIFY_START = "<!-- knot-verify -->";
 const VERIFY_END = "<!-- /knot-verify -->";
@@ -384,6 +392,168 @@ export function injectDirectoryFallback(html, fallback) {
   return source.replace(/<\/body>/i, `${block}\n  </body>`);
 }
 
+/** 首屏刊头要用的词条；缺条目退回英文，和页面上取词的回退链一致。 */
+export function bootCopy(catalog = {}, fallback = {}) {
+  const pick = (key) => translate(catalog, key) ?? translate(fallback, key) ?? "";
+  return {
+    wordmark: pick("hero.wordmark"),
+    name: pick("hero.name"),
+    eyebrow: pick("hero.eyebrow"),
+    protocol: pick("hero.protocol"),
+    tagline: pick("portal.tagline"),
+    summary: pick("hero.summary"),
+  };
+}
+
+/**
+ * 首屏刊头：与 Vue 挂载后的刊头同文、同字级、同间距，脚本到位时整块被替换。
+ *
+ * 样式跟着这一块走（页面内的 <style>），挂载后一起消失，不会在主样式之外
+ * 留下一份需要长期维护的副本；尺寸用同一套变量与 clamp，替换时才不跳版。
+ * 一条文案都没有就不写：半截刊头比空壳更难读。
+ */
+export function renderBoot({ locale, catalog = {}, fallback = {} } = {}) {
+  if (!LOCALES.includes(locale)) throw new Error(`未登记的语种：${locale}`);
+  const copy = bootCopy(catalog, fallback);
+  if (!copy.wordmark && !copy.tagline) return "";
+
+  const lines = [BOOT_START, '    <div class="boot">', '      <div class="boot-nav" aria-hidden="true"></div>', '      <div class="boot-mast">'];
+
+  if (copy.eyebrow || copy.protocol) {
+    lines.push('        <p class="boot-eyebrow">');
+    lines.push('          <span class="boot-dot" aria-hidden="true"></span>');
+    if (copy.eyebrow) lines.push(`          <span>${escapeHtml(copy.eyebrow)}</span>`);
+    if (copy.protocol) {
+      lines.push('          <span class="boot-sep" aria-hidden="true">/</span>');
+      lines.push(`          <span class="boot-protocol">${escapeHtml(copy.protocol)}</span>`);
+    }
+    lines.push("        </p>");
+  }
+
+  if (copy.wordmark || copy.name) {
+    lines.push('        <h1 class="boot-h1">');
+    if (copy.wordmark) lines.push(`          <span class="boot-wordmark">${escapeHtml(copy.wordmark)}</span>`);
+    if (copy.name) lines.push(`          <span class="boot-name">${escapeHtml(copy.name)}</span>`);
+    lines.push("        </h1>");
+  }
+
+  if (copy.tagline) lines.push(`        <p class="boot-lede">${escapeHtml(copy.tagline)}</p>`);
+  if (copy.summary) lines.push(`        <p class="boot-note">${escapeHtml(copy.summary)}</p>`);
+
+  lines.push("      </div>", "    </div>", BOOT_STYLE, BOOT_END);
+  return lines.join("\n");
+}
+
+export const BOOT_STYLE = `    <style>
+      /* 首屏占位刊头：跟着 #app 一起被 Vue 替换，只服务脚本到位之前的那一帧。 */
+      .boot {
+        color: var(--ink);
+        font-family: var(--font-body);
+      }
+      /* 与 .net-top 同高：那一行的高度只由右侧控件决定（换行时会更高），
+         这里按断点取实测值，刊头换上去时位置不动。改头部控件后要重新量一次。 */
+      .boot-nav {
+        height: 55.56px;
+      }
+      .boot-mast {
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
+        padding: clamp(1rem, 2.6vh, 2rem) clamp(1.1rem, 2.6vw, 2.4rem) 0.4rem;
+      }
+      .boot-eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin: 0;
+        font-family: var(--font-mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+      .boot-dot {
+        width: 4px;
+        height: 4px;
+        background: var(--accent);
+      }
+      .boot-sep,
+      .boot-protocol {
+        color: var(--faint);
+      }
+      .boot-h1 {
+        display: flex;
+        align-items: baseline;
+        gap: 0.55rem;
+        flex-wrap: wrap;
+        margin: 0;
+      }
+      .boot-wordmark {
+        font-family: var(--font-display);
+        font-size: clamp(2.2rem, 1.5rem + 1.9vw, 3.1rem);
+        font-weight: 700;
+        line-height: 0.95;
+        letter-spacing: 0.02em;
+        background: linear-gradient(96deg, var(--wordmark-1) 12%, var(--wordmark-2) 58%, var(--wordmark-3) 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .boot-name {
+        font-family: var(--font-display);
+        font-size: clamp(1.15rem, 0.9rem + 0.8vw, 1.45rem);
+        font-weight: 500;
+        letter-spacing: 0.1em;
+        color: transparent;
+        -webkit-text-stroke: 1px var(--outline-ink);
+        text-shadow: 0 0 0.5px var(--outline-ink);
+      }
+      .boot-lede {
+        max-width: 46ch;
+        margin: 0;
+        color: var(--ink);
+        font-size: clamp(0.95rem, 0.9rem + 0.2vw, 1.05rem);
+        line-height: 1.5;
+      }
+      .boot-note {
+        max-width: 58ch;
+        margin: 0;
+        color: var(--dim);
+        font-size: 0.78rem;
+        line-height: 1.6;
+      }
+      @media (max-width: 900px) {
+        .boot-nav {
+          height: 65.56px;
+        }
+        .boot-mast {
+          padding-top: 1.1rem;
+        }
+      }
+      @media (max-width: 480px) {
+        .boot-nav {
+          height: 75.56px;
+        }
+      }
+    </style>`;
+
+/** 把首屏写进 #app；重复生成时替换旧块，不叠加。 */
+export function injectBoot(html, block) {
+  const source = String(html ?? "");
+  const start = BOOT_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const end = BOOT_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`${start}[\\s\\S]*?${end}\\n?`);
+  if (!block) return source.replace(pattern, "");
+  // 块尾固定带一个换行：替换与插入都写成同一种形状，重复构建才逐字相等。
+  const filled = String(block).endsWith("\n") ? String(block) : `${block}\n`;
+  if (pattern.test(source)) return source.replace(pattern, filled);
+  // 挂载点是 #app：内容写在里面，Vue 接管时整块换掉，不需要额外的清理。
+  const app = /<div\s+id="app"[^>]*>/i;
+  if (!app.test(source)) throw new Error('首页里找不到 <div id="app">，无法写入首屏');
+  return source.replace(app, (tag) => `${tag}\n${filled}`);
+}
+
 export function renderRobots(origin = DEFAULT_ORIGIN) {
   const base = normalizeOrigin(origin);
   return [
@@ -450,6 +620,8 @@ export function writeSeo({ distDir, origin = DEFAULT_ORIGIN, catalogs = null, ve
   const instances = directoryInstances(data);
   fs.writeFileSync(path.join(dist, "robots.txt"), renderRobots(base));
   fs.writeFileSync(path.join(dist, "sitemap.xml"), renderSitemap(base));
+  // 首屏文案缺条目时退回英文：与页面上的取词回退链同一份来源。
+  const fallbackCatalog = catalogs?.en ?? readCatalog(LOCALES[0]);
 
   for (const locale of LOCALES) {
     const catalog = catalogs?.[locale] || readCatalog(locale);
@@ -463,8 +635,9 @@ export function writeSeo({ distDir, origin = DEFAULT_ORIGIN, catalogs = null, ve
     const home = path.join(dist, locale, "index.html");
     if (!fs.existsSync(home)) throw new Error(`读不到 ${home}：先跑 vite build`);
     const html = fs.readFileSync(home, "utf8");
-    // 顺序无关：两处注入各用一对标记，互不覆盖。
-    const withFallback = injectDirectoryFallback(html, renderDirectoryFallback({ locale, catalog, instances }));
+    // 三处注入各用一对标记，互不覆盖：首屏在 #app 里，摘要在 </body> 前，meta 在头部。
+    const withBoot = injectBoot(html, renderBoot({ locale, catalog, fallback: fallbackCatalog }));
+    const withFallback = injectDirectoryFallback(withBoot, renderDirectoryFallback({ locale, catalog, instances }));
     fs.writeFileSync(home, injectVerification(withFallback, tokens));
   }
 

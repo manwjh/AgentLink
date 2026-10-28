@@ -194,6 +194,13 @@ export async function seoCheck({
     if (!/<title>[^<]+<\/title>/i.test(html)) add(`/${locale}/`, "缺少非空 <title>");
     if (!metaContent(html, "description")) add(`/${locale}/`, "缺少 meta description");
     if (/name="robots"[^>]*noindex/i.test(html)) add(`/${locale}/`, "带 noindex，爬虫不会收录");
+    // 首屏刊头是构建时写进 #app 的：缺了它正文要等脚本才出现，
+    // 不跑 JS 的抓取只看到空壳，LCP 也退回去等主包。
+    if (!/<!-- knot-boot -->/.test(html)) {
+      add(`/${locale}/`, "首屏刊头没有写进 HTML，#app 是空壳");
+    } else if (!/<h1[^>]*class="boot-h1"/.test(html)) {
+      add(`/${locale}/`, "首屏刊头里没有标题");
+    }
   }
 
   // 5. 实例目录页：结构化数据是 CollectionPage。

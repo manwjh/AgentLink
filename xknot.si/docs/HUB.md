@@ -18,7 +18,7 @@ Contract in [FEDERATION.md](FEDERATION.md), system map in [ARCHITECTURE.md](ARCH
 | Data snapshot | build step + republish loop | merges manifest (issued zone), profile copies (self-described zone), probes, activity data, and showcase, writes `dist/data/hub.json` |
 | Showcase fetch | build step | fetches `cardsUrl` at build time, writes `var/cards/{id}.json` |
 | Agent guide | build step | the repo root `docs/KNOT_HELP.md` (English body, the only published source) renders to `dist/knot-help.html` and copies verbatim to `dist/knot-help.md` |
-| Crawl entry | build step | `ops/build-seo.mjs` writes `dist/robots.txt` and `dist/sitemap.xml` and, from the snapshot, three script-free `<locale>/instances/` directory pages; the home page's `<noscript>` carries the same directory summary |
+| Crawl entry | build step | `ops/build-seo.mjs` writes `dist/robots.txt` and `dist/sitemap.xml`, from the snapshot three script-free `<locale>/instances/` directory pages, the first-screen masthead into each locale page's `#app`, and the same directory summary as a `<noscript>` |
 
 The portal remains static files; the snapshot is assembled from disk at build time and on every republish. The only data-side write entry that can change the listing is the join application: it does not write `instances.json`, submission is approval, and it lands an `approved` record; afterwards the resident worker writes the entry into the manifest and connects it, and the snapshot recomputes itself. The application endpoint cannot change any already-listed entry.
 
@@ -106,7 +106,7 @@ xknot.si/
 │   ├── xknot-republish.service  portal snapshot recompute unit (oneshot)
 │   ├── xknot-republish.timer    portal snapshot recompute timer (every 10 minutes)
 │   ├── build-hub-data.mjs       merges manifest, probes, activity data, and showcase, writes data/hub.json
-│   ├── build-seo.mjs            crawl entry: robots, sitemap, three script-free instance directories, verification meta
+│   ├── build-seo.mjs            crawl entry: robots, sitemap, script-free instance directories, first-screen masthead, verification meta
 │   ├── seo-check.mjs            post-deploy crawl check: robots, sitemap, canonical, hreflang, structured data
 │   ├── doc-page.mjs             shared doc page: markdown → single-page HTML + raw text, shared by all static docs on the portal
 │   ├── render-knot-help.mjs     publishes repo-root docs/KNOT_HELP.md to /knot-help and /knot-help.md
@@ -321,10 +321,11 @@ After deploying to the hub, `deploy-api.sh` enables this timer; `systemctl list-
 
 ### 3.3 Crawl entry and static directory
 
-The portal home page is a single-page shell: a crawler that does not run JS sees only the title and no link to any instance. `ops/build-seo.mjs` adds a script-free layer after the snapshot:
+The portal home page is a single-page app, but the first screen no longer waits for the bundle. `ops/build-seo.mjs` writes the masthead into `#app` — wordmark, local name, eyebrow line, tagline and positioning line, taken from the same locale catalogs the page reads — with matching type sizes, spacing and a spacer for the header row. A crawler that does not run JS reads the same text a browser shows, and LCP stops waiting on the bundle. Vue replaces the block when it mounts, so nothing is rendered twice; the block carries its own `<style>`, so there is no second copy of the design outside the component styles to maintain, and repeated builds replace rather than stack. Everything else it adds is script-free:
 
 | Output | Content |
 |--------|---------|
+| `/<locale>/index.html` | first-screen masthead inside `#app`, plus a `<noscript>` directory summary before `</body>` |
 | `/<locale>/instances/` | script-free instance directory, included in the sitemap |
 | `/robots.txt` | crawl entry, points to the sitemap |
 | `/sitemap.xml` | the three locale entries, the instance directory, and `/knot-help` |
