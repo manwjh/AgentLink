@@ -187,9 +187,14 @@ Diagnose:
 # Instance: the path to the entry host should go over the physical NIC, not utun*
 route get <entry host IP>
 
+# Instance: which interface actually carried the traffic — a TUN cannot fake this
+ops/scripts/egress-check.sh --url https://<site>/api/health
+
 # Entry host: the source should be the instance's public IP
 sudo journalctl -u sshd --since "-10 min" | grep "Accepted.*knot-tunnel"
 ```
+
+`route get` only says where packets would go. Once the split tunnel is in place it does point at the physical NIC, and it keeps pointing there even after a rule is missed or another TUN inserts a more specific route ahead of the default — by then the traffic is already inside that tunnel. The interface byte counters are the only witness: `egress-check.sh` snapshots them around one request and names the interface that grew. It exits `3` when the egress is a tunnel interface, so it can gate a deployment.
 
 **The right fix is to add the entry host IP to WARP's split tunnel**, so it never enters the tunnel in the first place:
 
