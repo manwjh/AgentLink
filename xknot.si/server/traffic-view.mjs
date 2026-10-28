@@ -6,7 +6,7 @@
 
 // 与 ops/traffic.mjs 的 DEFAULT_DAYS 对齐：那边保留 30 天，这边最多也读 30 天。
 export const MAX_DAYS = 30;
-export const MAX_TOP = 8;
+const MAX_TOP = 8;
 
 function count(value) {
   const number = Number(value);

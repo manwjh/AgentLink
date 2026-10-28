@@ -10,7 +10,6 @@ import { readFileSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { updateInstanceConfig } from "./edit.mjs";
 import { checkLabel, suggestLabels, SUBDOMAIN_MIN } from "../ops/subdomain.mjs";
@@ -32,7 +31,7 @@ import {
 import { RELAY_LIMITS, domainOf, relayMessage, validateRelayRequest } from "./relay.mjs";
 import { ipHash, normalizeUsername } from "./store.mjs";
 import { summarizeTraffic } from "./traffic-view.mjs";
-import { LIMITS, normalizePublicKey, validateApplication } from "./validate.mjs";
+import { LIMITS, normalizePublicKey, validEmail, validateApplication } from "./validate.mjs";
 
 const BODY_LIMIT = 16 * 1024;
 const COOKIE = "xknot_admin";
@@ -522,10 +521,10 @@ export function createApp({ store, config }) {
     return null;
   }
 
+  // 邮箱只认一个清洗规则：server/validate.mjs 的 validEmail。
+  // 曾经这里复制过同一条正则，改一边忘一边就会漂移。
   function normalizeEmail(value) {
-    const email = String(value || "").trim().toLowerCase();
-    if (email.length > 120) return "";
-    return /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/.test(email) ? email : "";
+    return validEmail(value);
   }
 
   // 登录后看到的东西：本站的公开状态、自报的活动计数与橱窗条数。
@@ -1733,10 +1732,6 @@ export function createApp({ store, config }) {
   }
 
   return { handle, COOKIE, ipHash: (ip) => ipHash(ip, secret) };
-}
-
-export function adminDirOf(here) {
-  return path.join(path.dirname(fileURLToPath(here)), "..", "admin");
 }
 
 export { LIMITS, normalizeLocale };

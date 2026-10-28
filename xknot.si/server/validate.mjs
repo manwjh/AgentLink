@@ -14,7 +14,7 @@ import { isCountryCode } from "../web/src/lib/regions.js";
 import { checkLabel, normalizeLabel } from "../ops/subdomain.mjs";
 
 // 中枢自己的域名。签发出来的地址都挂在它下面。
-export const HUB_DOMAIN = "xknot.si";
+const HUB_DOMAIN = "xknot.si";
 
 export const LIMITS = {
   name: 40,
@@ -71,11 +71,6 @@ export function validEmail(value) {
   const address = String(value ?? "").trim().toLowerCase();
   if (!address || [...address].length > LIMITS.email) return "";
   return EMAIL_RE.test(address) ? address : "";
-}
-
-export function validRegion(value) {
-  const region = String(value ?? "").trim().toUpperCase();
-  return isCountryCode(region) ? region : "";
 }
 
 export function validTimeZone(value) {
