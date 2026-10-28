@@ -18,6 +18,8 @@ Note the distinction between three "version" concepts:
 
 - **The snap strip's pressed ring is drawn on the card, not outside it.** The ring used to be an outer shadow, while the strip clips at the card's edge: on the leftmost card — and on the rightmost once scrolled to the end — the vertical side was cut away and only the corner arcs survived. It is now a 2px border on the card's own edge, so all four sides show at any scroll position, and a pressed card keeps its drop shadow.
 
+- **Keyboard focus on the snap strip is whole again.** The same clipping cut the 2px focus ring: at the left end, and at the right end once scrolled, the vertical sides were gone and only the corner arcs survived, while the top edge was squeezed to a single row. Focus is now drawn inside the card too, so the ring closes on all four sides at any scroll position. The create card's photo fills the tile and paints over anything beneath it, so there the visible ring is the same overlay the pressed state uses.
+
 ## [0.9.0] — 2026-10-27
 
 The instance host is macOS only, and deployment starts with a gate instead of a surprise. A machine that cannot run Knot is now told so before anything is unpacked, stopped, or switched; node is resolved to an absolute path so launchd does not have to guess a `PATH`; and Linux + systemd leaves `main` rather than being carried along untested.

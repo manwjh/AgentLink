@@ -1668,9 +1668,12 @@ textarea.share-input:focus {
   padding: 0.45rem 0.75rem;
 }
 
-/* 按下态画在卡片内侧：横滑视口按卡片边缘裁切，画在盒子外面的描边
-   在左侧第一张（以及滚到尽头的最后一张）只留得下圆角，竖边会被切掉。 */
-button.intel-create[aria-pressed="true"]::after {
+/* 按下态与键盘焦点都画在卡片内侧：横滑视口按卡片边缘裁切，画在盒子外面的
+   描边在左侧第一张（以及滚到尽头的最后一张）只留得下圆角，竖边会被切掉。
+   建卡片的头像区铺满整张卡、又都是定位元素，画在它下面的 outline 会被盖住，
+   所以这里用覆盖层；按下态与焦点圈的位置和颜色本来就一样，共用同一圈。 */
+button.intel-create[aria-pressed="true"]::after,
+button.intel-create:focus-visible::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -1761,6 +1764,12 @@ button.intel-create[aria-pressed="true"]::after {
 
 .intel-rail-viewport::-webkit-scrollbar {
   display: none;
+}
+
+/* 同一处裁切也切掉键盘焦点圈外圈的两条边：向内画，两端就没有半圈缺口。
+   建卡片的 outline 会被铺满整卡的头像区盖住，可见的那一圈由上面的 ::after 画。 */
+.intel-rail-viewport > :focus-visible {
+  outline-offset: -2px;
 }
 
 button.intel-create {
