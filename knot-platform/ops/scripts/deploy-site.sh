@@ -103,6 +103,8 @@ if [[ -f "${KNOT_SITE_DIR:-}/tunnel.env" ]]; then
   source "$KNOT_SITE_DIR/tunnel.env"
   set +a
 fi
+# 「这个站点接了入口」只看两份配置：有 tunnel.env，或 site.env 里显式写了
+# KNOT_TUNNEL=1 并给了账号。见 lib/site-config.sh 的 knot_tunnel_unit_action。
 CONFIG_ARGS=(--site "$KNOT_SITE")
 
 # ---- 0. 主机门禁 ----
@@ -343,19 +345,11 @@ if [[ -n "$ADMIN_LINK_HINT" ]]; then
   knot_warn "$ADMIN_LINK_HINT"
 fi
 
-if knot_enabled KNOT_ENTRY_ENABLED; then
-  knot_require KNOT_ENTRY_SSH "KNOT_ENTRY_ENABLED=1 时要配置 KNOT_ENTRY_SSH=user@entry-host。只部署本机请设 KNOT_ENTRY_ENABLED=0。"
-  PUSH_KEY="$(knot_expand_path "$KNOT_ENTRY_PUSH_KEY")"
-  if [[ ! -f "$PUSH_KEY" ]]; then
-    knot_warn "快照推送私钥不存在：${PUSH_KEY}。没有它，/discover.json 不会被推到入口主机。"
-  fi
-fi
-
-# 隧道私钥的检查不放在 KNOT_ENTRY_ENABLED 里面：接了子域的站点常常是
-# KNOT_ENTRY_ENABLED=0（入口 conf 由中枢写），隧道由 tunnel.env 打开；
-# 放进那个判断里的话，密钥丢了也算「部署成功」，直到入口 502 才有人发现。
+# 隧道是实例唯一通向出口的一段：密钥或账号缺了，部署成功也只会换来入口 502，
+# 所以在这里就停下，而不是等有人点开页面才发现。
 if knot_enabled KNOT_TUNNEL; then
-  knot_require KNOT_TUNNEL_SSH "KNOT_TUNNEL=1 时要有隧道账号；留空会自动用 knot-tunnel@<入口主机>。"
+  knot_require KNOT_TUNNEL_SSH "KNOT_TUNNEL=1 时要有隧道账号，由 sites/<站点>/tunnel.env 写入。"
+
   TUNNEL_KEY="$(knot_tunnel_key_path)"
   if [[ ! -f "$TUNNEL_KEY" ]]; then
     knot_fail "隧道私钥不存在：${TUNNEL_KEY}
@@ -608,15 +602,22 @@ case "$RUNTIME" in
     # 旁路探测：每五分钟记一次 OpenClaw 宿主状态。没装 OpenClaw 时它只是把
     # unknown 写进 var/run，页面上那一块照实说「未知」，绝不显示成错误。
     knot_install_launchd "$KNOT_APP_DIR/ops/launchd/openclaw-probe.plist" "$(knot_label openclaw-probe)"
-    # 隧道单元：手写 site.env 的，或中枢自动接通写的 tunnel.env，任一成立就装。
-    # 后者是「接入 xknot.si」的常态：site.env 仍是 local（不推入口 conf），
-    # 账号与端口在 tunnel.env 里，连出去这件事归中枢管。
-    if [[ -f "${KNOT_SITE_DIR:-}/tunnel.env" ]] || { knot_enabled KNOT_ENTRY_ENABLED && knot_enabled KNOT_TUNNEL; }; then
-      echo "==> install entry tunnel LaunchAgent"
-      knot_install_launchd "$KNOT_APP_DIR/ops/launchd/entry-tunnel.plist" "$(knot_label entry-tunnel)"
-    else
-      knot_bootout_launchd "$(knot_label entry-tunnel)"
-    fi
+    # 隧道单元：账号与端口由中枢的开通进度写进 tunnel.env，有这份文件就装。
+    # 两份配置都没提到隧道时保持现状：卸掉它等于让已接入口的站点当场 502，
+    # 而这次发布并没有带来任何「隧道该撤掉」的依据。
+    case "$(knot_tunnel_unit_action)" in
+      install)
+        echo "==> install entry tunnel LaunchAgent"
+        knot_install_launchd "$KNOT_APP_DIR/ops/launchd/entry-tunnel.plist" "$(knot_label entry-tunnel)"
+        ;;
+      remove)
+        echo "==> KNOT_TUNNEL 已明确关闭，卸下 entry tunnel LaunchAgent"
+        knot_bootout_launchd "$(knot_label entry-tunnel)"
+        ;;
+      *)
+        echo "==> 没有隧道配置，保留现有 entry tunnel 单元"
+        ;;
+    esac
     ;;
   *) ;;
 esac

@@ -39,6 +39,8 @@
 //                                                          发退出联邦信（清单状态仍需自己改）
 //   node server/admin-cli.mjs notify-log [n] [--case id]   发信日志
 //   node server/admin-cli.mjs provision-retry <申请 id>    放行停住的自动接通：清退避与失败标记，不动已完成的前置
+//   node server/admin-cli.mjs entry-adopt <实例 id>        接管一个入口 conf 不是中枢写的实例：补接通记录、换整站反代
+//                                                          --force 覆盖已有的接通记录；需要 XKNOT_ENTRY_HOST
 //
 // 发信命令需要 SMTP_HOST / MAIL_FROM，读法与接口进程一致（见 server/mail.mjs）。
 // 两者没在环境里给出时，会自动读 `var/mail.env`（与 systemd 的 EnvironmentFile 同一份）。
@@ -60,7 +62,8 @@ import { checkManifestEntry, toManifestEntry, toRosterMember } from "./manifest.
 import { validateRoster } from "../ops/validate-federation.mjs";
 import { TIERS } from "../ops/profile-schema.mjs";
 import { ALL_EVENTS, TEMPLATE_VERSION, buildMail } from "./notify.mjs";
-import { reopenRun } from "./provision.mjs";
+import { adoptRun, reopenRun, switchEntry } from "./provision.mjs";
+import { createEntryHost } from "./entry-host.mjs";
 import { openStore } from "./store.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -113,6 +116,10 @@ async function writeJsonAtomic(file, value) {
 function flag(rest, name, fallback = null) {
   const index = rest.indexOf(`--${name}`);
   return index >= 0 ? rest[index + 1] ?? fallback : fallback;
+}
+
+function hasFlag(rest, name) {
+  return rest.includes(`--${name}`);
 }
 
 function mailerFromEnv() {
@@ -738,6 +745,40 @@ async function main(argv) {
     store.saveProvisionRun(reopenRun(run));
     store.recordEvent("instance.provision_retry", run.instanceId, "人工放行：清掉退避与失败标记");
     console.log(`${run.instanceId}: 已放行，worker 下一轮（不超过 20 秒）继续推进`);
+    return;
+  }
+
+  if (command === "entry-adopt") {
+    // 已经在清单与名册里、但入口 conf 不是中枢写的实例：补一份已验收的 run，
+    // 把那份 conf 换成整站反代，此后由 worker 每轮核对。
+    const id = rest[0];
+    if (!id) return fail("用法：entry-adopt <实例 id>");
+    const manifest = await readManifest();
+    const instance = (manifest.instances || []).find((item) => item.id === id);
+    if (!instance) return fail(`清单里没有 ${id}`);
+    if (instance.status !== "active") return fail(`${id} 在清单里的状态是 ${instance.status}，只接管已验收的实例`);
+    const roster = await readRoster();
+    const member = (roster.members || []).find((item) => item.id === id);
+    if (!member) return fail(`名册里没有 ${id}：先在 federation.json 登记隧道账号与端口`);
+    if (store.getProvisionRun(id) && !hasFlag(rest, "--force")) {
+      return fail(`${id} 已有接通记录；要重跑用 provision-retry，确实要覆盖加 --force`);
+    }
+
+    const entryHost = process.env.XKNOT_ENTRY_HOST || "";
+    if (!entryHost) return fail("缺少 XKNOT_ENTRY_HOST：接管要写入口主机的 nginx conf");
+    let run;
+    try {
+      run = adoptRun({ instance, member, entryHost });
+    } catch (error) {
+      return fail(`接管参数不合法：${error.code || ""} ${error.message}`.trim());
+    }
+
+    const host = createEntryHost();
+    const switched = await switchEntry({ host, run, entry: true, adopt: true });
+    if (!switched.changed) return fail(`${id} 的入口 conf 已经是整站反代，没有改动`);
+    store.createProvisionRun(run);
+    store.recordEvent("instance.entry_adopted", id, `入口 conf 由中枢接管（原内容留在 ${run.host}.conf.adopted）`);
+    console.log(`${id}: 入口已由中枢接管，清单状态保持 ${instance.status}，worker 每轮核对`);
     return;
   }
 

@@ -25,9 +25,20 @@ test("中枢门户的 nginx 打开 gzip，且只压文本类", () => {
 // 落到默认的 main 格式（不记 $host）就分不出来，hub.json 永远不生成，
 // 而聚合任务会「成功」退出、只是少一块数据，不会有任何报错。
 test("门户与实例子域共用按 host 分桶的访问日志", () => {
-  assert.match(conf, /^\s*access_log \/var\/log\/nginx\/knot-access\.log knot_json;$/m);
-  // 该格式由入口的 log.conf 声明，这份 conf 只是引用；注释要留住这条依赖。
-  assert.match(conf, /knot-log\.conf/);
+  assert.match(conf, /^\s*access_log \/var\/log\/nginx\/knot-access\.log knot_json_hub;$/m);
+  // 格式必须在这份 conf 里声明，不能引用别处装的文件：少一次安装步骤，
+  // 少一处跨项目的隐式依赖。聚合端按这些键读，少一个键就少一列。
+  assert.match(conf, /^log_format knot_json_hub escape=json$/m);
+  // 名字按 vhost 唯一：与子域的 knot_json_<子域> 不重名，同一台入口主机上
+  // 不会出现 log_format 重复声明。
+  assert.deepEqual(conf.match(/^log_format .*$/gm), ["log_format knot_json_hub escape=json"]);
+  const start = conf.indexOf("log_format knot_json_hub");
+  const format = conf.slice(start, conf.indexOf("}';", start));
+  for (const key of ["at", "host", "status", "method", "uri", "bytes", "requestTime", "upstreamTime", "cache", "ip", "ua", "ref"]) {
+    assert.match(format, new RegExp(`"${key}":`), `日志格式缺 ${key}`);
+  }
+  // 查询串里可能带分享令牌与搜索词，不进日志。
+  assert.doesNotMatch(format, /\$request_uri|\$args/);
 });
 
 test("Agent 指引有两条静态地址：HTML 给浏览器，原文给 Agent", () => {
@@ -46,4 +57,3 @@ test("根路径直接送出跳转页，不是 302", () => {
   // 换验证令牌后要立刻可见，不能按长缓存发。
   assert.match(conf, /location = \/\s*\{[^}]*expires -1;/s);
 });
-

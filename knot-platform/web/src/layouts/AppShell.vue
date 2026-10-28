@@ -137,7 +137,7 @@ function reloadPage() {
 }
 
 // 浏览器标签与搜索结果里的标题跟路由走，别停留在默认的 Knot。
-// 只写站点名会把入口静态页给 /discover 写的标题统一盖掉，每页都只剩站点名。
+// 只写站点名会把 /discover 自己那份页标题盖掉，每页都只剩站点名。
 //
 // canonical 一起更新：SPA 内跳转不重新取 HTML，head 不动的话，从首页点进
 // /discover 之后页面仍然声明自己就是首页，服务端那份独立的 canonical 等于白写。

@@ -4,7 +4,7 @@
 // 页面与接口穿隧道回源。收口点只有一个，所以「一个子域的流量」不需要实例配合、
 // 不需要埋点，也不需要第三方。适用条件与 ops/peers.mjs 相同：中枢与入口同机。
 //
-// 日志格式由 knot-platform/ops/entry/log.conf.template 定义，每行一个 JSON。
+// 日志格式由每份入口 vhost 自己声明（server/provision.mjs 的 logFormatName），每行一个 JSON。
 //
 // 产出 var/traffic/{id}.json：按天聚合，保留最近 N 天（默认 30）。只读这一份，
 // 不存原始日志、不存 IP、不存完整 referer；IP 只用于当天去重，落盘前已经消失。
@@ -453,11 +453,11 @@ export async function run(options = {}) {
     throw new Error(`cannot read instances: ${instancesPath}`);
   }
 
-  // 没有日志不是错误：入口还没装 knot-log.conf 时，这份聚合就该安静地跳过。
+  // 没有日志不是错误：入口还没写访问日志时，这份聚合就该安静地跳过。
   try {
     await stat(logPath);
   } catch {
-    log(`没有访问日志：${logPath}（入口还没装 knot-log.conf？）`);
+    log(`没有访问日志：${logPath}（入口 conf 里还没有 access_log？）`);
     return { skipped: "no_log", logPath, dataDir, written: [] };
   }
 

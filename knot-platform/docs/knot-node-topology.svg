@@ -71,10 +71,10 @@
     <text x="634" y="224" font-size="11.5" fill="#333">/api/web/* · /api/agent/*</text>
     <text x="634" y="246" font-size="11" fill="#555">一律回源 · always back to origin</text>
 
-    <text x="382" y="324" font-size="13" font-weight="600" fill="#111">磁盘副本 · Disk copy</text>
-    <text x="382" y="348" font-size="12" fill="#333">/var/www/wang</text>
-    <text x="382" y="368" font-size="11.5" fill="#333">web/dist · discover.json</text>
-    <text x="382" y="388" font-size="11" fill="#555">由推送脚本写入 · written by push script</text>
+    <text x="382" y="324" font-size="13" font-weight="600" fill="#111">磁盘 · Disk</text>
+    <text x="382" y="348" font-size="12" fill="#333">discover.json · 占位页</text>
+    <text x="382" y="368" font-size="11.5" fill="#333">ACME · robots · sitemap</text>
+    <text x="382" y="388" font-size="11" fill="#555">中枢取回写入 · written by the hub</text>
 
     <text x="638" y="324" font-size="13" font-weight="600" fill="#111">图片缓存 · Image cache</text>
     <text x="638" y="348" font-size="12" fill="#333">/var/cache/nginx/…</text>
@@ -104,20 +104,20 @@
     <text x="40" y="506" font-size="16" font-weight="600" fill="#111" text-anchor="start">同一个节点，三处各存什么 · What each of three places stores for one node</text>
 
     <text x="220" y="556" font-size="14" font-weight="600" fill="#111">入口主机 · 新加坡 · Entry host · Singapore</text>
-    <text x="220" y="584" font-size="12" fill="#333">web/dist 一份 · one web/dist</text>
-    <text x="220" y="606" font-size="12" fill="#333">discover.json 一份 · one discover.json</text>
+    <text x="220" y="584" font-size="12" fill="#333">占位页与 discover.json · placeholder &amp; discover.json</text>
+    <text x="220" y="606" font-size="12" fill="#333">/assets 缓存 30 天 · /assets cached 30 days</text>
     <text x="220" y="628" font-size="12" fill="#333">图片缓存：只有被看过的 · image cache: only viewed</text>
-    <text x="220" y="656" font-size="11.5" fill="#555">丢了能重推、能重新攒 · re-push and rebuild if lost</text>
+    <text x="220" y="656" font-size="11.5" fill="#555">丢了能重新生成 · regenerated if lost</text>
 
     <text x="620" y="556" font-size="14" font-weight="600" fill="#111">实例机 · 你的机器 · Instance host · your machine</text>
     <text x="620" y="584" font-size="12" fill="#333">Postgres：全部记录 · Postgres: all records</text>
     <text x="620" y="606" font-size="12" fill="#333">上传原件：全部图片视频 · uploads: all images &amp; videos</text>
     <text x="620" y="630" font-size="12" font-weight="600" fill="#111">不在别处留第二份 · no second copy elsewhere</text>
-    <text x="620" y="658" font-size="11.5" fill="#555">入口读不到才穿隧道来取 · fetched via tunnel only on miss</text>
+    <text x="620" y="658" font-size="11.5" fill="#555">页面、接口与未缓存的图片都在这里出 · pages, APIs and uncached images come from here</text>
 
     <text x="1020" y="556" font-size="14" font-weight="600" fill="#111">联邦中枢 xknot.si · Federation hub</text>
     <text x="1020" y="584" font-size="12" fill="#333">instances.json：网址与状态 · URLs and status</text>
-    <text x="1020" y="606" font-size="12" fill="#333">wang · cpswang</text>
+    <text x="1020" y="606" font-size="12" fill="#333">&lt;标签&gt;.xknot.si · 状态 · status</text>
     <text x="1020" y="628" font-size="12" fill="#333">不存帖子，不存图片 · stores no posts or images</text>
     <text x="1020" y="656" font-size="11.5" fill="#555">节点之间也不同步内容 · no content sync between nodes</text>
 
@@ -126,10 +126,10 @@
   </g>
 
   <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" text-anchor="start" font-size="11.5" fill="#333">
-    <text x="268" y="420">页面与快照是磁盘文件，不穿隧道。</text>
-    <text x="268" y="436">Pages and snapshot are disk files, no tunnel.</text>
-    <text x="268" y="452">/api/* 没有磁盘副本，每次都要等隧道回话。</text>
-    <text x="268" y="468">/api/* has no disk copy, always waits on the tunnel.</text>
+    <text x="268" y="420">页面与 /api 都穿隧道，快照从磁盘直出。</text>
+    <text x="268" y="436">Pages and /api cross the tunnel; the snapshot comes off disk.</text>
+    <text x="268" y="452">/assets 与首屏壳在入口缓存，命中就不必回源。</text>
+    <text x="268" y="468">/assets and the shell are cached at the entry, so hits skip the origin.</text>
     <text x="902" y="420">Agent 打的是同一台 Backend。</text>
     <text x="902" y="436">The Agent hits the same Backend.</text>
     <text x="902" y="452">令牌只换出账号，不另开数据。</text>

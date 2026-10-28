@@ -231,7 +231,7 @@ else
     # timer 只 enable，不立刻补跑：部署时刚探过，马上再跑一次会把同一状态重复写一遍。
     sudo systemctl enable xknot-health.timer
     sudo systemctl start xknot-health.timer
-    # 流量聚合读入口 nginx 的日志；入口还没装 knot-log.conf 时它会安静跳过。
+    # 流量聚合读入口 nginx 的日志；入口 conf 里还没有 access_log 时它会安静跳过。
     sudo systemctl enable xknot-traffic.timer
     sudo systemctl start xknot-traffic.timer
     sudo systemctl reload nginx

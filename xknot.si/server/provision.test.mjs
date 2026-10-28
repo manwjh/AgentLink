@@ -11,6 +11,7 @@ import {
   ENTRY_PROXIED_MARK,
   ProvisionError,
   RETRY_BACKOFF_MS,
+  adoptRun,
   createRun,
   dueStep,
   isStalled,
@@ -276,8 +277,8 @@ test("render: every entry vhost writes the access log the traffic aggregator rea
 });
 
 test("render: the log format is declared in the same file, under a per-domain name", () => {
-  // conf.d/*.conf 按文件名 include。共享的 knot-log.conf 排在 cpswang 之后，
-  // 那里声明的 knot_json 在这个文件里还不存在，nginx -t 会报 unknown log format。
+  // conf.d/*.conf 按文件名 include。共享声明可能排在这个文件之后，
+  // 那时这里用到的格式名还不存在，nginx -t 会报 unknown log format。
   const conf = renderVhost({ domain: "cpswang.xknot.si", root: "/var/www/cpswang", port: 18090 });
   assert.match(conf, /^log_format knot_json_cpswang_xknot_si escape=json$/m);
   // 聚合端按这些键读；少一个就是少一列数据。
@@ -301,13 +302,13 @@ test("render: crawler entry comes from the entry disk, not the SPA fallback", ()
     assert.ok(block.includes(`try_files /${name} @knot_origin;`), `${name} 必须先从磁盘取，再回落隧道`);
     assert.match(block, /add_header Cache-Control "public, max-age=300" always;/);
   }
-  // 静态投放那一档由实例自己的文件出，入口不重复写。
-  const staticConf = renderVhost({ domain: "cpswang.xknot.si", root: "/var/www/cpswang", port: 18090 });
-  assert.doesNotMatch(staticConf, /location = \/robots\.txt/);
+  // 隧道未接通那一档只发占位页，入口不写这两条。
+  const pendingConf = renderVhost({ domain: "cpswang.xknot.si", root: "/var/www/cpswang", port: 18090 });
+  assert.doesNotMatch(pendingConf, /location = \/robots\.txt/);
 });
 
 test("render: generated robots and sitemap match what an instance serves itself", () => {
-  // 同一台机器上还有走静态投放的子域，那两份文件由实例侧写入。两边不一致，
+  // 入口把这两份写在磁盘上先发出去，Backend 也按同一规则回同一份。两边不一致，
   // 同一个联盟的站点地图就会分成两种格式。
   assert.equal(
     renderRobotsTxt("https://cpswang.xknot.si"),
@@ -486,10 +487,10 @@ test("reconcile: an already-provisioned subdomain gets the crawler entry backfil
 });
 
 test("reconcile: an externally managed conf keeps its own directory untouched", async () => {
-  // 伙伴推静态 conf 时，robots.txt 由实例自己写。中枢再插一份进去就是两个来源，
-  // 谁都不知道最终生效的是哪一份——所以连目录都不碰。
+  // 首行没有中枢的管理标记，就不归中枢管：robots.txt 也不插，否则两个来源
+  // 各写一份，谁都不知道最终生效的是哪一份——所以连目录都不碰。
   const host = fakeHost({
-    files: { "/etc/nginx/conf.d/cpswang.xknot.si.conf": "# 由 ops/scripts/render-config.mjs 生成\nserver {}\n" },
+    files: { "/etc/nginx/conf.d/cpswang.xknot.si.conf": "# 由运维手写\nserver {}\n" },
   });
   const run = createRun({
     application: APP,
@@ -791,8 +792,8 @@ test("render: the proxied entry caches /assets/ so a partner node is not re-dril
 });
 
 test("render: the page shell is cached briefly so a tunnel blip opens a shell instead of a blank page", () => {
-  // 静态投放时 index.html 在入口磁盘上，隧道全断也能画出骨架；整站反代没有这一步。
-  // 10 秒缓存 + use_stale 把这一档补回来：命中不必穿隧道，断了发上一次的壳。
+  // 整站反代后页面骨架也在隧道另一头：隧道全断时不做缓存就是白屏。
+  // 10 秒缓存 + use_stale 让命中不必穿隧道、断了发上一次的壳。
   const conf = renderVhost({ domain: "cpswang.xknot.si", root: "/var/www/cpswang", port: 18090, entry: true });
   // 从最后那个 `location /` 开始：前面 80 端口那份是 301 跳转。
   const shell = conf.slice(conf.lastIndexOf("location / {"));
@@ -1019,9 +1020,9 @@ test("render: uploads are cached at the entry, but the backend keeps the last wo
 });
 
 test("render: a conf someone else wrote is never rewritten", async () => {
-  // 伙伴跑 push-entry.sh 推静态入口时写的是另一份模板，开头没有中枢的标记。
-  // 中枢每 20 秒核对一次，若照旧覆盖，两边就会互相改写。
-  const external = `# Knot 公网入口。由 ops/scripts/render-config.mjs 从 sites/zhoujj/site.env 生成。\nserver { server_name zhoujj.xknot.si; }\n`;
+  // 入口 conf 首行没有中枢的管理标记，就不是中枢写的。中枢每 20 秒核对一次，
+  // 若照旧覆盖，两边就会互相改写。
+  const external = `# Knot 公网入口，运维手写。\nserver { server_name zhoujj.xknot.si; }\n`;
   const writes = [];
   const host = {
     readRootFile: async () => external,
@@ -1036,7 +1037,7 @@ test("render: a conf someone else wrote is never rewritten", async () => {
 });
 
 test("run: vhost and tls steps leave an externally managed conf alone", async () => {
-  const external = "# 由 ops/scripts/render-config.mjs 生成\n";
+  const external = "# 运维手写的入口 conf\n";
   const host = fakeHost({ onCall: () => null });
   host.readRootFile = async (file) => (file === "/etc/nginx/conf.d/cpswang.xknot.si.conf" ? external : null);
   const run = createRun({
@@ -1055,4 +1056,54 @@ test("run: vhost and tls steps leave an externally managed conf alone", async ()
   const written = await runStep({ step: "vhost", run, application: APP, host: fresh, entry: {}, roster });
   assert.equal(written.external, undefined);
   assert.equal(fresh.fileWrites.length, 1);
+});
+
+test("adopt: a live instance gets a finished run built from the roster", () => {
+  const run = adoptRun({
+    instance: { id: "lab", url: "https://lab.xknot.si", status: "active" },
+    member: { id: "lab", tunnel: { account: "knot-tunnel-lab", port: 18080 } },
+    entryHost: "203.0.113.10",
+  });
+  // 已验收：worker 每轮按 active 的 run 核对，不再走签发流程。
+  assert.equal(run.state, "active");
+  assert.equal(run.host, "lab.xknot.si");
+  assert.equal(run.account, "knot-tunnel-lab");
+  assert.equal(run.port, 18080);
+  // 每一步都算完成：账号、证书、DNS 早已就位，重跑只会换掉正在用的隧道。
+  assert.deepEqual(run.steps.map((step) => step.id), STEP_ORDER);
+  assert.ok(run.steps.every((step) => step.state === "done" && step.note), "接管后的步骤应全部标为完成");
+  assert.equal(run.tunnelConfirmedAt, run.createdAt);
+});
+
+test("adopt: a member without tunnel parameters is refused, not guessed", () => {
+  // 猜一个端口写进 nginx 与 ssHD 的 Match 段，等于把别人的入口抢过来。
+  for (const member of [{ id: "lab" }, { id: "lab", tunnel: { account: "knot-tunnel-lab", port: 80 } }, { id: "lab", tunnel: { port: 18080 } }]) {
+    assert.throws(
+      () => adoptRun({ instance: { id: "lab", url: "https://lab.xknot.si" }, member }),
+      (error) => error instanceof ProvisionError,
+      JSON.stringify(member)
+    );
+  }
+});
+
+test("adopt: the conf someone else wrote is taken over, and the original is kept", async () => {
+  // 接管是一次性动作：先原样存一份，再把 conf 换成中枢那一版。
+  const external = "# 运维手写的入口 conf\nserver { server_name lab.xknot.si; }\n";
+  const host = fakeHost({ files: { "/etc/nginx/conf.d/lab.xknot.si.conf": external } });
+  const run = adoptRun({
+    instance: { id: "lab", url: "https://lab.xknot.si" },
+    member: { id: "lab", tunnel: { account: "knot-tunnel-lab", port: 18080 } },
+    entryHost: "203.0.113.10",
+  });
+
+  const result = await switchEntry({ host, run, entry: true, adopt: true });
+  assert.equal(result.changed, true);
+  const backup = host.fileWrites.find((write) => write.file.endsWith(".conf.adopted"));
+  assert.equal(backup?.text, external);
+  const conf = host.fileWrites.find((write) => write.file === "/etc/nginx/conf.d/lab.xknot.si.conf");
+  assert.match(conf.text, new RegExp(ENTRY_PROXIED_MARK));
+  // 接管之后它就是中枢的 conf：再核对一次不该改动任何东西。
+  host.readRootFile = async () => conf.text;
+  host.fileWrites.length = 0;
+  assert.deepEqual(await switchEntry({ host, run, entry: true }), { changed: false });
 });

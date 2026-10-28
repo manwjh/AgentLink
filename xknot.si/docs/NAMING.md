@@ -103,12 +103,12 @@ The test: the showcase is six cards the hub displays from what a partner publish
 
 **A role is a responsibility; a machine is hardware.** One machine can be both hub host and entry host at once — the current deployment is exactly that — but configuration ownership still follows the role: the hub's belongs to `xknot.si/ops/`, and the instance's own belongs to `knot-platform/sites/<site>/`.
 
-**The word "entry" is split into two places by scope; do not merge them:**
+**The entry belongs to the hub, and is split by scope; do not merge them:**
 
-- `knot-platform/ops/entry/` — **reusable entry software**: nginx conf templates, cache snippets, sshd tunnel templates, render and push scripts. Every instance uses this same set.
-- `xknot.si/ops/entry/` — **the set the hub installs for a specific issued subdomain**: the concrete domain's conf and the connection runbook. It is an issuance record, not software, and only hub staff change it.
+- Entry software — **the generator**: `xknot.si/server/provision.mjs` and `ops/provision-worker.mjs` render every subdomain's placeholder, static root, nginx conf, certificate, tunnel account and sshd block.
+- `xknot.si/ops/entry/` — **records for one issued subdomain**: a conf that deviates from the generator, its connection runbook. It is an issuance record, not software, and only hub staff change it.
 
-The test: if another instance could reuse it → instance side; if it hardcodes a specific subdomain → hub side.
+The instance side runs the tunnel and the Backend; it never writes anything on the entry host.
 
 **The word "edge" is retired.** It looks like a CDN edge node yet is often physically on the same machine as the hub, so readers cannot tell whether it means the hub or the entry. Write "entry host" for the entry and "hub host" for the hub. The full concept map and ownership are in [docs/concepts.md](../../docs/concepts.md).
 

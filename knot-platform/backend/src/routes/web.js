@@ -38,8 +38,8 @@ import { brandView, siteTimeZone } from "../profile.js";
 
 const MiB = 1024 * 1024;
 
-// 匿名公开读的缓存头。入口的静态投放按同一个 TTL 缓存
-// （ops/entry/site.conf.template 的 proxy_cache_valid 200 10s），两处必须一致：
+// 匿名公开读的缓存头。入口的反代按同一个 TTL 缓存站点快照
+// （xknot.si 渲染 vhost 时写下的 proxy_cache_valid 200 10s），两处必须一致：
 // 入口留着 10 秒的副本，后端却声明 5 秒，读者会在自己也没法解释的时间里看到旧内容。
 // 登录后的响应逐人不同，一律 private, no-store。
 const ANON_CACHE = "public, max-age=10";

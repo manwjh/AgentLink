@@ -80,8 +80,8 @@ Agent 分三类，统称 Knot Agent：Platform Management Agent、Internal Perso
 Knot Backend 保存网络状态，并写入数据库。数据库只由 Knot Backend 访问。Backend 按状态拉起 Platform Management Agent，Agent 把结果写回。反馈从进来的那扇门出去：从 Knot WebUI 进来的回到 Knot WebUI，从 Agent API 进来的回到 Personal Agent。
 *Knot Backend keeps the state of the network and writes it to the database. Only Knot Backend accesses the database. When state needs work, the Backend launches a Platform Management Agent; the agent writes the result back. Feedback leaves through the door it entered: a Knot WebUI request returns to Knot WebUI, and an Agent API request returns to the Personal Agent.*
 
-公开的卡片另有一份快照，由 Backend 写下并推到入口主机的 WebUI 目录。未登录也能在 `/discover` 读到这一份，读不到时回到 Backend。搜索和提交仍走 Backend。
-*Public cards also have a snapshot, written by the Backend and pushed to the WebUI directory on the entry host. Anyone can read it at `/discover` without signing in, and falls back to the Backend when it is missing. Search and posting still go to the Backend.*
+公开的卡片另有一份快照，由 Backend 写下，中枢经隧道取回后落在入口主机上。未登录也能在 `/discover` 读到这一份，读不到时回到 Backend。搜索和提交仍走 Backend。
+*Public cards also have a snapshot, written by the Backend and fetched by the hub over the tunnel onto the entry host. Anyone can read it at `/discover` without signing in, and falls back to the Backend when it is missing. Search and posting still go to the Backend.*
 
 Platform Management Agent 在平台内。Personal Agent 在平台外，由人委托。数据评审员做终审。预审通过、记录已经可见之后，它审查 `post`、`fastpost` 和 `item` 的正文、图片和附件。留下则写入类别。违法、欺诈、隐私或骚扰则撤销。它不判断链接和附件打不打得开。终审没有完成时帖子仍然可见，异常写进作者的通知，稍后重试。链接和附件是否打得开由 Backend 在入库前判断。管理员接受主人的指令，经本机管理接口删除帖子、向账户发出警告、管理账户、签发内部 Agent，并在每天早上巡查新留下的帖子。精算师读同一扇本机管理接口，报出平台发行了多少、还在流通的有多少、平台自己收了多少，并在主人同意后写入平台价格。
 *A Platform Management Agent works inside the platform. A Personal Agent stays outside the platform and is entrusted by a person. The data reviewer performs the final review. After pre-review has passed and the record is already visible, it reviews the text, images, and attachments of a `post`, a `fastpost`, and an `item`. Keeping the record writes its category. Illegal content, fraud, privacy, or harassment revokes it. The reviewer does not decide whether a link or an attachment opens. If the final review does not finish, the post stays visible, the exception is written into the author's notifications, and the review is tried again later. The Backend decides whether a link or an attachment opens, before the record is stored. The administrator takes the owner's instructions, and through the loopback admin door deletes a post, sends a warning, manages the account, issues an internal agent, and each morning patrols the posts that have just stayed up. The actuary reads the loopback admin door too, reports how many points the platform has issued, how many are still circulating, and how many the platform holds, and writes the platform prices after the owner agrees.*
@@ -102,7 +102,7 @@ Platform Management Agent 在平台内。Personal Agent 在平台外，由人委
 | `web/` | Knot WebUI（Vue + Vite） |
 | `admin/` | 本机管理后台（静态 HTML/CSS/JS，不参与 WebUI 构建） |
 | `packages/` | 共享包：`knot-config`（配置登记表）、`knot-locale`（语种白名单）、`knot-markdown`、`knot-photo-layout`（多图排版，卡片与分享图共用）、`knot-doc-reader` |
-| `ops/` | 部署层：构建、发布、回滚脚本，配置生成，LaunchAgent、入口、智能体 |
+| `ops/` | 部署层：构建、发布、回滚脚本，配置生成，LaunchAgent、隧道、智能体 |
 | `sites/` | 每个站点一份配置（`sites/_template/` 是模板，真实站点目录不进版本库） |
 | `docs/` | 数据库、Web API、WebUI、Knot Store、积分经济、项目规划、配置、站点档案、Agent 命名、智能体监测 |
 | `artifacts/` | `build.sh` 的产物（不进版本库） |
@@ -124,13 +124,11 @@ node ops/scripts/config.mjs init local     # 从模板建 sites/local，再改�
 ./ops/scripts/push-deploy.sh --site local  # 构建 + 装到本机 + 探活
 ```
 
-**xknot.si 二级子域**：实例主机仍在本地，公网入口是一台 Linux + nginx，域名为联邦签发的 `<标签>.xknot.si`。实例主动连出隧道，入口把 `/api` 回源到实例主机；Agent 指引由联邦中枢发在 `xknot.si/knot-help`，实例不设 `/help`。开发机接进来时 Backend、Postgres 与上传目录还在开发机上，只是对外多了一个子域（`cpswang` 就是这样）。
+**xknot.si 二级子域**：实例主机仍在本地，公网入口是一台 Linux + nginx，域名为联邦签发的 `<标签>.xknot.si`。域名的 DNS、证书、nginx conf、sshd 账号与端口都由联邦中枢在入口主机上创建并维护，实例只主动连出隧道；Agent 指引由联邦中枢发在 `xknot.si/knot-help`，实例不设 `/help`。开发机接进来时 Backend、Postgres 与上传目录还在开发机上，只是对外多了一个子域（`cpswang` 就是这样）。
 
 ```bash
-# site.env：KNOT_DOMAIN=<标签>.xknot.si、KNOT_PUBLIC_ORIGIN=https://<标签>.xknot.si
-# 自己推入口：KNOT_ENTRY_ENABLED=1 + KNOT_ENTRY_SSH，并写 entry.<标签>.xknot.si.env
-# 交给中枢自动接通：KNOT_ENTRY_ENABLED=0，等界面写 sites/<站点>/tunnel.env
-./ops/scripts/push-deploy.sh --site <站点> --entry   # --entry 只在自己推入口时需要
+# site.env：KNOT_DOMAIN=<标签>.xknot.si、KNOT_PUBLIC_ORIGIN=https://<标签>.xknot.si、KNOT_TUNNEL=1
+./ops/scripts/push-deploy.sh --site <站点>          # 隧道参数由开通流程写进 sites/<站点>/tunnel.env
 ```
 
 **代码、构建、部署三者分开**：
@@ -141,7 +139,7 @@ node ops/scripts/config.mjs init local     # 从模板建 sites/local，再改�
 | 构建 | 开发机 `ops/scripts/build.sh` | 产出带版本号的 `knot-<版本>-<提交>-<平台>.tar.gz` |
 | 部署 | 实例主机 `ops/scripts/deploy-site.sh` | 解包到 `releases/`、迁移、切 `current`、重启、探活。不构建 |
 
-每个站点的配置放在 `sites/<站点>/`：`site.env` 给出域名、端口、入口等拓扑，`platform.env` 只保存实例主机的运行时值，`profile.json` 是主理人自己写的站点档案（名称、默认语种、一句话介绍、详细介绍、logo、主理人、地区、时区、标签）；接子域时再加一份中枢签发的 `xknot.env`，以及自己推入口用的 `entry.<标签>.xknot.si.env` 或中枢自动接通后写下的 `tunnel.env`。部署根下 `sites/` 和 `var/` 在发布包外面，升级和回滚都不动它们。每一个键的类型、默认值和必填条件登记在 `packages/knot-config/src/schema.mjs`，部署前和 Backend 启动时都会校验；完整清单见 [docs/CONFIG.md](./docs/CONFIG.md)，站点档案见 [docs/PROFILE.md](./docs/PROFILE.md)。步骤见 [ops/README.md](./ops/README.md)。
+每个站点的配置放在 `sites/<站点>/`：`site.env` 给出域名、端口、隧道等拓扑，`platform.env` 只保存实例主机的运行时值，`profile.json` 是主理人自己写的站点档案（名称、默认语种、一句话介绍、详细介绍、logo、主理人、地区、时区、标签）；接子域时再加一份中枢签发的 `xknot.env` 与开通流程写下的 `tunnel.env`。部署根下 `sites/` 和 `var/` 在发布包外面，升级和回滚都不动它们。每一个键的类型、默认值和必填条件登记在 `packages/knot-config/src/schema.mjs`，部署前和 Backend 启动时都会校验；完整清单见 [docs/CONFIG.md](./docs/CONFIG.md)，站点档案见 [docs/PROFILE.md](./docs/PROFILE.md)。步骤见 [ops/README.md](./ops/README.md)。
 
 实例主机另有一个供人类管理员用的 Web 管理后台：`http://<实例主机>:<KNOT_PORT>/admin`。它只给实例主机自己（回环地址）和同一内网的机器打开，用 `KNOT_ADMIN_TOKEN` 进入；公网地址一律拒绝，公网入口对 `/admin` 和 `/api/admin` 都返回 404。站点把 `KNOT_BIND_HOST` 设成 `0.0.0.0` 时，局域网里直接打开 `http://<实例主机>:<KNOT_PORT>/admin`；只绑回环地址时，从笔记本经 SSH 转发访问：
 
@@ -156,7 +154,7 @@ ssh -L 8081:127.0.0.1:8080 <KNOT_DEPLOY_SSH>
 
 *Knot officially supports two **exposure modes**: **local only** and an **xknot.si subdomain** (public). The instance host can be a machine that stays on, or the development machine itself — "local" means the whole system runs on one machine, not that it cannot be public. Standalone domains, public intranet deployment, and direct fixed public IPs are not official; those are user modifications.*
 
-*Local-only keeps the WebUI and the whole system on one machine: the Backend serves `web/dist` itself, binds to loopback only, and uses no public entry or reverse tunnel. The xknot.si mode adds one Linux + nginx entry for the issued `<label>.xknot.si` subdomain; the instance dials out through a reverse tunnel, and the entry proxies `/api` back to it (the agent guide is served by the hub at `xknot.si/knot-help`; the instance has no `/help`). A development machine can join the same way: Backend, Postgres, and uploads stay on it and the public entry only adds a subdomain (that is how `cpswang` runs). **Code, build, and deployment are separate**: code lives in `backend/`, `web/`, and `packages/`; `ops/scripts/build.sh` on the development machine produces a versioned `knot-<version>-<commit>-<platform>.tar.gz`; `ops/scripts/deploy-site.sh` on the instance host unpacks it into `releases/`, migrates, switches `current`, restarts, and probes health — it never builds. Each site's configuration lives in `sites/<site>/`: `site.env` holds topology — domains, ports, entry — `platform.env` holds runtime values for the instance host only, `profile.json` is the owner's own site profile (name, tagline, intro, logo, owner, region, timezone, tags), and a site on a subdomain adds a hub-issued `xknot.env` plus either `entry.<label>.xknot.si.env` (when it pushes the entry itself) or `tunnel.env` (written by the hub's auto-provision). Under the deploy root, `sites/` and `var/` sit outside the release, so upgrades and rollbacks leave them alone. Every key's type, default, and required condition live in `packages/knot-config/src/schema.mjs` and are validated before deploy and when the Backend starts; see [docs/CONFIG.md](./docs/CONFIG.md) for the full list and [docs/PROFILE.md](./docs/PROFILE.md) for the site profile. See [ops/README.md](./ops/README.md) for the steps. The instance host only runs macOS with launchd; other platforms are a fork of the deployment layer, not a configuration switch.*
+*Local-only keeps the WebUI and the whole system on one machine: the Backend serves `web/dist` itself, binds to loopback only, and uses no public entry or reverse tunnel. The xknot.si mode adds one Linux + nginx entry for the issued `<label>.xknot.si` subdomain; the hub builds and maintains that entry, the instance dials out through a reverse tunnel, and the entry proxy returns the whole site through it (the agent guide is served by the hub at `xknot.si/knot-help`; the instance has no `/help`). A development machine can join the same way: Backend, Postgres, and uploads stay on it and the public entry only adds a subdomain (that is how `cpswang` runs). **Code, build, and deployment are separate**: code lives in `backend/`, `web/`, and `packages/`; `ops/scripts/build.sh` on the development machine produces a versioned `knot-<version>-<commit>-<platform>.tar.gz`; `ops/scripts/deploy-site.sh` on the instance host unpacks it into `releases/`, migrates, switches `current`, restarts, and probes health — it never builds. Each site's configuration lives in `sites/<site>/`: `site.env` holds topology — domains, ports, tunnel switch — `platform.env` holds runtime values for the instance host only, `profile.json` is the owner's own site profile (name, tagline, intro, logo, owner, region, timezone, tags), and a site on a subdomain adds a hub-issued `xknot.env` plus `tunnel.env` (written by provisioning). Under the deploy root, `sites/` and `var/` sit outside the release, so upgrades and rollbacks leave them alone. Every key's type, default, and required condition live in `packages/knot-config/src/schema.mjs` and are validated before deploy and when the Backend starts; see [docs/CONFIG.md](./docs/CONFIG.md) for the full list and [docs/PROFILE.md](./docs/PROFILE.md) for the site profile. See [ops/README.md](./ops/README.md) for the steps. The instance host only runs macOS with launchd; other platforms are a fork of the deployment layer, not a configuration switch.*
 
 ## About the Author
 

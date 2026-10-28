@@ -40,11 +40,11 @@
   <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" text-anchor="middle">
     <text x="145" y="56" font-size="15" fill="#111">人 · Person</text>
     <text x="1040" y="56" font-size="15" fill="#111">Personal Agent</text>
-    <text x="880" y="136" font-size="15" font-weight="600" fill="#111">AgentLink · bot01</text>
+    <text x="880" y="136" font-size="15" font-weight="600" fill="#111">AgentLink · 实例主机</text>
     <text x="875" y="436" font-size="15" font-weight="600" fill="#111">Platform Management Agent</text>
     <text x="152" y="218" font-size="15" font-weight="600" fill="#111">Knot WebUI</text>
-    <text x="152" y="244" font-size="12" fill="#333">静态页在入口主机 · static pages on entry host</text>
-    <text x="152" y="268" font-size="12" fill="#333">/var/www/knot</text>
+    <text x="152" y="244" font-size="12" fill="#333">页面经隧道 · pages via the tunnel</text>
+    <text x="152" y="268" font-size="12" fill="#333">Backend serve web/dist</text>
     <text x="362" y="218" font-size="15" font-weight="600" fill="#111">公开快照 · Public snapshot</text>
     <text x="362" y="246" font-size="12" fill="#333">discover.json</text>
     <text x="362" y="268" font-size="12" fill="#333">图片用原地址 · images use original URLs</text>
@@ -56,13 +56,13 @@
     <text x="1032" y="521" font-size="15" fill="#111">精算师 · Actuary</text>
   </g>
   <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" font-size="13" fill="#333">
-    <text x="54" y="162" font-size="15" font-weight="600" fill="#111">公网入口 · Public entry · wang.xknot.si</text>
-    <text x="54" y="286">nginx 只把页面和这份快照交给浏览器。</text>
-    <text x="54" y="306">nginx serves only the page and this snapshot to the browser.</text>
+    <text x="54" y="162" font-size="15" font-weight="600" fill="#111">公网入口 · Public entry · &lt;标签&gt;.xknot.si</text>
+    <text x="54" y="286">nginx 整站反代回隧道，另给这份快照。</text>
+    <text x="54" y="306">nginx proxies the whole site back through the tunnel, plus this snapshot.</text>
     <text x="54" y="330">提交、搜索、登录经隧道回到 Backend。</text>
     <text x="54" y="350">Submit, search and login reach Backend via the tunnel.</text>
-    <text x="40" y="640">入口主机只放页面和公开快照。记录、积分和 Platform Management Agent 都在 bot01。</text>
-    <text x="40" y="662">The entry host holds only pages and the public snapshot; records, points and the Platform Management Agent live on bot01.</text>
+    <text x="40" y="640">入口主机只放 nginx、证书与公开快照。记录、积分和 Platform Management Agent 都在实例主机上。</text>
+    <text x="40" y="662">The entry host holds only nginx, certificates and the public snapshot; records, points and the Platform Management Agent live on the instance host.</text>
   </g>
   <g font-family="PingFang SC, Hiragino Sans GB, sans-serif" font-size="13" fill="#333">
     <text x="578" y="42" text-anchor="middle">委托 · Delegate</text>

@@ -40,7 +40,6 @@ export const GROUPS = [
   { id: "site", label: "站点" },
   { id: "platform", label: "实例主机" },
   { id: "publish", label: "从开发机发布" },
-  { id: "entry", label: "公网入口" },
   { id: "tunnel", label: "回源隧道" },
   { id: "xknot", label: "XKnot 接入" },
   { id: "mail", label: "邮件" },
@@ -54,6 +53,10 @@ export const GROUPS = [
 ];
 
 const MiB = 1024 * 1024;
+
+// 入口 nginx 的请求体上限（52m），由中枢渲染 vhost 时写死。实例这一侧只能比它小：
+// 超了就在入口被 413 挡掉，后端一行日志都不会有。
+const ENTRY_MAX_BODY_BYTES = 52 * MiB;
 
 function hostOf(value) {
   try {
@@ -96,8 +99,7 @@ const SITE_KEYS = [
     group: "site",
     type: "string",
     default: "",
-    scope: ["dev", "entry"],
-    desc: "xknot.si 签发的二级子域，形如 <标签>.xknot.si。只在本机访问时留空；接子域时与入口文件名一致。",
+    desc: "xknot.si 签发的二级子域，形如 <标签>.xknot.si。只在本机访问时留空；接子域后就填中枢签发的那一个。",
     example: "wang.xknot.si",
   },
   {
@@ -337,154 +339,6 @@ const SITE_KEYS = [
     desc: "开发机上构建产物（发布包和校验和）的输出目录。留空用 <knot-platform>/artifacts。",
   },
 
-  // ---- 公网入口 ----
-  {
-    key: "KNOT_ENTRY_ENABLED",
-    group: "entry",
-    type: "bool",
-    default: 0,
-    desc: "1 表示部署时由这台机器把 WebUI 与 nginx 配置推到 KNOT_ENTRY_SSH；0 表示不碰入口主机（只在本机，或入口已由中枢自动接通）。",
-  },
-  {
-    key: "KNOT_ENTRY_SSH",
-    group: "entry",
-    type: "string",
-    default: "",
-    scope: ["dev", "platform"],
-    desc: "入口主机的 ssh 目标。",
-    example: "ec2-user@<入口主机>",
-  },
-  {
-    key: "KNOT_ENTRY_SSH_KEY",
-    group: "entry",
-    type: "path",
-    default: "$HOME/.ssh/id_rsa",
-    scope: ["dev"],
-    desc: "在开发机上推页面用的私钥。",
-  },
-  {
-    key: "KNOT_ENTRY_PUSH_KEY",
-    runtime: "KNOT_ENTRY_PUSH_KEY",
-    group: "entry",
-    type: "path",
-    default: "$HOME/.ssh/knot-entry-publish",
-    scope: ["platform"],
-    desc: "在实例主机上推公开快照用的私钥，可以和 KNOT_ENTRY_SSH_KEY 不是同一把。",
-  },
-  {
-    key: "KNOT_ENTRY_WEB_ROOT",
-    group: "entry",
-    type: "path",
-    default: "/var/www/knot",
-    scope: ["entry"],
-    desc: "入口主机上放 WebUI 的目录。",
-  },
-  {
-    key: "KNOT_ENTRY_CONF",
-    group: "entry",
-    type: "path",
-    default: "/etc/nginx/conf.d/knot.conf",
-    scope: ["entry"],
-    desc: "入口主机上的 nginx 站点配置路径。",
-  },
-  {
-    key: "KNOT_ENTRY_WEB_OWNER",
-    group: "entry",
-    type: "string",
-    default: "nginx:nginx",
-    scope: ["entry"],
-    desc: "WebUI 目录的属主。",
-  },
-  {
-    key: "KNOT_ENTRY_CACHE_DIR",
-    group: "entry",
-    type: "path",
-    default: "/var/cache/nginx/knot_uploads",
-    scope: ["entry"],
-    desc: "上传文件的反向代理缓存目录。",
-  },
-  {
-    key: "KNOT_ENTRY_CACHE_ZONE",
-    group: "entry",
-    type: "string",
-    default: "knot_uploads",
-    scope: ["entry"],
-    desc: "nginx proxy_cache 区名。",
-  },
-  {
-    key: "KNOT_ENTRY_CACHE_SIZE",
-    group: "entry",
-    type: "size",
-    default: "2g",
-    scope: ["entry"],
-    desc: "缓存上限，nginx 写法，如 2g。",
-  },
-  {
-    key: "KNOT_ENTRY_MAX_BODY",
-    group: "entry",
-    type: "size",
-    default: "52m",
-    scope: ["entry"],
-    desc: "入口主机接受的请求体上限。必须大于后端附件上限，否则大文件在 nginx 就被截断。",
-  },
-  {
-    key: "KNOT_ENTRY_ACCESS_LOG",
-    group: "entry",
-    type: "path",
-    default: "/var/log/nginx/knot-access.log",
-    scope: ["entry"],
-    desc: "入口访问日志。同一台入口主机上的子域共用一个文件，按 $host 分；中枢的流量聚合读它。",
-  },
-  {
-    key: "KNOT_ENTRY_PROXY_PORT",
-    group: "entry",
-    type: "port",
-    default: 18080,
-    scope: ["entry", "platform"],
-    desc: "入口回源端口。nginx 把 /api 转到这里，隧道再转回实例主机。",
-  },
-  {
-    key: "KNOT_ENTRY_SSL",
-    group: "entry",
-    type: "bool",
-    default: 1,
-    scope: ["entry"],
-    desc: "1 监听 443 并配证书；0 只监听 80，证书还没签好时用。",
-  },
-  {
-    key: "KNOT_ENTRY_CERT",
-    group: "entry",
-    type: "path",
-    default: "",
-    scope: ["entry"],
-    derive: (env) => {
-      // 官方只支持一个入口，证书跟着这个入口的域名走。
-      const host = String(env.KNOT_DOMAIN || "").trim() || hostOf(env.KNOT_PUBLIC_ORIGIN);
-      return host ? `/etc/letsencrypt/live/${host}/fullchain.pem` : "";
-    },
-    desc: "证书链。留空由 KNOT_DOMAIN 推导。",
-  },
-  {
-    key: "KNOT_ENTRY_KEY",
-    group: "entry",
-    type: "path",
-    default: "",
-    scope: ["entry"],
-    derive: (env) => {
-      const host = String(env.KNOT_DOMAIN || "").trim() || hostOf(env.KNOT_PUBLIC_ORIGIN);
-      return host ? `/etc/letsencrypt/live/${host}/privkey.pem` : "";
-    },
-    desc: "证书私钥。留空由 KNOT_DOMAIN 推导。",
-  },
-  {
-    key: "KNOT_ENTRY_RELOAD_CMD",
-    group: "entry",
-    type: "string",
-    default: "sudo systemctl reload nginx",
-    scope: ["entry"],
-    desc: "改完 nginx 配置后的 reload 命令。入口主机不是 systemd（例如 OpenBSD、launchd）时改成自己的。",
-  },
-
   // ---- 回源隧道 ----
   {
     key: "KNOT_TUNNEL",
@@ -500,19 +354,15 @@ const SITE_KEYS = [
     type: "string",
     default: "",
     scope: ["platform"],
-    derive: (env) => {
-      const host = String(env.KNOT_ENTRY_SSH || "").split("@").pop();
-      return host ? `knot-tunnel@${host}` : "";
-    },
-    desc: "隧道账号。留空是 knot-tunnel@<KNOT_ENTRY_SSH 的主机>。",
+    desc: "隧道账号，由中枢的开通进度写进 sites/<站点>/tunnel.env（形如 knot-tunnel-<标签>）。没有接入 xknot.si 时留空。",
   },
   {
     key: "KNOT_TUNNEL_KEY",
     group: "tunnel",
     type: "path",
-    default: "$HOME/.ssh/knot-entry",
+    default: "tunnel_ed25519",
     scope: ["platform"],
-    desc: "实例主机上建隧道用的私钥。相对路径按站点目录（sites/<站点>/）解析；自动接通写的 tunnel.env 用 tunnel_ed25519。",
+    desc: "实例主机上建隧道用的私钥。相对路径按站点目录（sites/<站点>/）解析，密钥和 tunnel.env 同住一个目录。",
   },
   {
     key: "KNOT_TUNNEL_LOCAL_PORT",
@@ -529,8 +379,7 @@ const SITE_KEYS = [
     type: "port",
     default: "",
     scope: ["platform"],
-    derive: (env) => env.KNOT_ENTRY_PROXY_PORT || 18080,
-    desc: "隧道在入口主机上占用的端口。留空等于 KNOT_ENTRY_PROXY_PORT。",
+    desc: "隧道在入口主机上占用的端口，由中枢的开通进度写进 sites/<站点>/tunnel.env。每一份都是中枢按名册分配的，不要手填。",
   },
 ];
 
@@ -585,14 +434,6 @@ const PLATFORM_KEYS = [
     default: "",
     computed: true,
     desc: "由部署脚本写入：<knot-platform>/sites/<站点>/profile.json。站点档案（自述区）在这里，主理人在 /admin 里编辑。",
-  },
-  {
-    key: "KNOT_DISCOVER_PUSH_CMD",
-    group: "entry",
-    type: "string",
-    default: "",
-    computed: true,
-    desc: "由部署脚本写入：开启入口时是 push-discover.sh，关闭时为空。",
   },
 
   // ---- 邮件 ----
@@ -705,7 +546,7 @@ const PLATFORM_KEYS = [
     // 16 MiB：手机相册里的 24MP/48MP 原图常在 5–12 MiB，8 MiB 会把它们挡在门外。
     // WebUI 会先压到上限以内再上传，这里是兜底，不是正常路径。
     default: 16 * MiB,
-    desc: "单张图片上限。WebUI 会先在浏览器里压到这个值以内；同时要小于 KNOT_ENTRY_MAX_BODY。",
+    desc: "单张图片上限。WebUI 会先在浏览器里压到这个值以内；同时要小于入口 nginx 的请求体上限（52m，由中枢生成）。",
   },
   {
     key: "KNOT_UPLOAD_AUDIO_MAX_BYTES",
@@ -719,7 +560,7 @@ const PLATFORM_KEYS = [
     group: "storage",
     type: "bytes",
     default: 50 * MiB,
-    desc: "单个附件上限。必须小于 KNOT_ENTRY_MAX_BODY。",
+    desc: "单个附件上限。必须小于入口 nginx 的请求体上限（52m，由中枢生成），否则大文件在入口就被截断。",
   },
   {
     key: "DISCOVER_BOARD_DIR",
@@ -843,8 +684,8 @@ const PLATFORM_KEYS = [
     group: "admin",
     type: "url",
     default: "",
-    desc: "管理后台链接里写死的内网地址，例如 http://192.168.3.91:8080。留空时按 KNOT_BIND_HOST 与网卡推断。",
-    example: "http://192.168.3.91:8080",
+    desc: "管理后台链接里写死的内网地址，形如 http://<内网地址>:<KNOT_PORT>。留空时按 KNOT_BIND_HOST 与网卡推断。",
+    example: "http://<内网地址>:8080",
   },
 ];
 
@@ -933,22 +774,6 @@ const XKNOT_KEYS = [
   },
 ];
 
-// 公网入口键：一个站点一份 sites/<站点>/entry.<标签>.xknot.si.env。
-//
-// 官方只支持一个入口，域名必须是 xknot.si 签发的二级子域（<标签>.xknot.si）。
-// 入口文件是叠加层：只写与 site.env 不同的项，其余沿用；KNOT_DOMAIN 必须写，且要与文件名一致。
-const ENTRY_KEYS = [
-  {
-    key: "KNOT_ENTRY_SERVE",
-    group: "entry",
-    type: "enum",
-    values: ["static", "proxy"],
-    default: "static",
-    scope: ["entry"],
-    desc: "static：首页与 /assets 从入口主机上的磁盘出，只有动态走隧道；proxy：连首页也回源到实例。",
-  },
-];
-
 function normalize(entry, file) {
   return {
     file,
@@ -964,7 +789,6 @@ export const KEYS = [
   ...SITE_KEYS.map((entry) => normalize(entry, "site")),
   ...PLATFORM_KEYS.map((entry) => normalize(entry, "platform")),
   ...XKNOT_KEYS.map((entry) => normalize(entry, "xknot")),
-  ...ENTRY_KEYS.map((entry) => normalize(entry, "entry")),
 ];
 
 const BY_KEY = new Map(KEYS.map((entry) => [entry.key, entry]));
@@ -1071,12 +895,6 @@ function validateValue(entry, raw) {
 
 export const RULES = [
   {
-    id: "entry-ssh",
-    when: (env) => truthy(env.KNOT_ENTRY_ENABLED),
-    need: ["KNOT_ENTRY_SSH"],
-    message: "KNOT_ENTRY_ENABLED=1 时必须配置 KNOT_ENTRY_SSH。不自己推入口时写 KNOT_ENTRY_ENABLED=0。",
-  },
-  {
     id: "external-db",
     when: (env) => env.KNOT_DB_MODE === "external",
     need: ["KNOT_DATABASE_URL"],
@@ -1098,14 +916,6 @@ function isLocalOnlySite(env) {
 
 export const WARNINGS = [
   {
-    id: "tunnel-same-port",
-    when: (env) =>
-      truthy(env.KNOT_ENTRY_ENABLED) &&
-      truthy(env.KNOT_TUNNEL) &&
-      String(env.KNOT_ENTRY_PROXY_PORT || 18080) === String(env.KNOT_PORT || 8080),
-    message: "回源端口和 Backend 端口相同。入口如果和平台同机，会撞端口。",
-  },
-  {
     id: "backup-off",
     // 留空是「还没决定」，公网站点提醒一句；写 null / none / off 是「决定了不备份」，不再提醒。
     // 三者效果一样：都不装备份任务，脚本也不会去建目录。
@@ -1115,11 +925,12 @@ export const WARNINGS = [
   {
     id: "body-limit",
     when: (env) => {
-      const body = sizeToBytes(env.KNOT_ENTRY_MAX_BODY || "52m");
+      // 入口的请求体上限是固定的 52m（由中枢渲染 vhost 时写死，实例改不了），
+      // 附件超过它就在入口被 413 挡掉，后端日志里什么都看不到。
       const attachment = Number(env.KNOT_UPLOAD_ATTACHMENT_MAX_BYTES || 50 * MiB);
-      return body > 0 && attachment > 0 && attachment >= body;
+      return attachment > 0 && attachment >= ENTRY_MAX_BODY_BYTES;
     },
-    message: "附件上限不小于入口请求体上限，大文件会在 nginx 被截断。调大 KNOT_ENTRY_MAX_BODY。",
+    message: "附件上限不小于入口的请求体上限（52m），大文件会在 nginx 被截断。调小附件上限或分片上传。",
   },
 ];
 
@@ -1153,16 +964,11 @@ export function checkSite(env) {
     } else if (originHost !== domain) {
       errors.push(`KNOT_PUBLIC_ORIGIN 的主机名 ${originHost} 与 KNOT_DOMAIN=${domain} 不一致。`);
     }
-    // 自己推入口的站点在这里建隧道。入口由中枢自动接通时，隧道写在 sites/<站点>/tunnel.env，
-    // site.env 里保持 0 也不报错——cpswang 就是这种形态。
-    if (truthy(env.KNOT_ENTRY_ENABLED) && !truthy(env.KNOT_TUNNEL)) {
-      errors.push("KNOT_ENTRY_ENABLED=1 时必须设 KNOT_TUNNEL=1，由实例主机主动连出回源隧道。");
-    }
   } else {
-    if (truthy(env.KNOT_ENTRY_ENABLED)) {
-      errors.push("KNOT_ENTRY_ENABLED=1 是「自己推入口」，必须写 KNOT_DOMAIN=<标签>.xknot.si。");
-    }
-    if (origin && !isLocalOnlySite(env)) {
+    // 只写对外地址、没写 KNOT_DOMAIN：接子域时这两项必须成对。
+    if (hostOf(env.KNOT_PUBLIC_ORIGIN)?.endsWith(".xknot.si")) {
+      errors.push("接子域时必须写 KNOT_DOMAIN=<标签>.xknot.si，与 KNOT_PUBLIC_ORIGIN 的主机名一致。");
+    } else if (origin && !isLocalOnlySite(env)) {
       errors.push("不接子域时 KNOT_PUBLIC_ORIGIN 必须是 http://127.0.0.1:<端口> 或 http://localhost:<端口>；独立域名或内网公开部署属于用户改造范围。");
     }
     if (truthy(env.KNOT_TUNNEL)) {
@@ -1192,10 +998,6 @@ export function checkSite(env) {
       errors.push(`${key} 是实例运行时项，写在 sites/<站点>/platform.env，不要写进 site.env。`);
       continue;
     }
-    if (entry?.file === "entry") {
-      errors.push(`${key} 是公网入口项，写在 sites/<站点>/entry.<标签>.xknot.si.env，不要写进 site.env。`);
-      continue;
-    }
     if (RETIRED_KEYS.has(key)) {
       warnings.push(`${key} 已经删除（Linux 实例主机专用的项，main 只支持 macOS + launchd），这一行可以删掉。`);
       continue;
@@ -1205,82 +1007,8 @@ export function checkSite(env) {
   return { errors, warnings };
 }
 
-// 公网入口文件校验：一个文件描述一个公网入口。
-//
-// 不在这里查「入口文件是否与 site.env 一致」——那要看目录，由部署脚本做。
-// 这里只保证单份文件自身成立：域名写了、类型对、没写错作用域的键。
-export function checkEntryFile(env, { file = "" } = {}) {
-  const errors = [];
-  const warnings = [];
-
-  for (const entry of ENTRY_KEYS) {
-    const value = String(env[entry.key] ?? "").trim();
-    if (!value) continue;
-    const message = validateValue(entry, value);
-    if (message) errors.push(message);
-  }
-
-  const host = String(env.KNOT_DOMAIN || "").trim();
-  if (!host) {
-    errors.push("公网入口文件必须写 KNOT_DOMAIN=<这个入口的域名>，它决定 server_name、证书路径与清单条目。");
-  } else if (!XKNOT_SUBDOMAIN.test(host)) {
-    errors.push(`KNOT_DOMAIN 必须是 xknot.si 签发的二级子域（<标签>.xknot.si），现在是 "${host}"。`);
-  } else if (file) {
-    // 文件名就是域名，改域名时最容易只改一处。
-    const expected = `entry.${host}.env`;
-    const base = String(file).split("/").pop();
-    if (base !== expected) {
-      errors.push(`文件名与 KNOT_DOMAIN 不一致：KNOT_DOMAIN=${host}，文件名应为 ${expected}。`);
-    }
-  }
-
-  if (truthy(env.KNOT_ENTRY_SSL)) {
-    // 证书与私钥可以留空由 KNOT_DOMAIN 推导，所以按解析后的值判断，别把推导当成缺失。
-    const ssl = resolve(BY_KEY.get("KNOT_ENTRY_SSL"), env, {});
-    if (truthy(ssl)) {
-      const cert = resolve(BY_KEY.get("KNOT_ENTRY_CERT"), env, {});
-      const key = resolve(BY_KEY.get("KNOT_ENTRY_KEY"), env, {});
-      if (isBlank(cert) || isBlank(key)) {
-        errors.push("这个入口取不到证书路径：写 KNOT_ENTRY_CERT / KNOT_ENTRY_KEY，或写对 KNOT_DOMAIN 让它推导。");
-      }
-    }
-  }
-  if (isBlank(resolve(BY_KEY.get("KNOT_ENTRY_WEB_ROOT"), env, {}))) {
-    errors.push("取不到 KNOT_ENTRY_WEB_ROOT：写这个子域入口的静态根。");
-  }
-
-  const known = new Set([...ENTRY_KEYS.map((entry) => entry.key)]);
-  // 入口文件是叠加层，可以覆盖 site.env 的键，所以登记的站点键都算已知。
-  for (const entry of SITE_KEYS) known.add(entry.key);
-  for (const key of Object.keys(env)) {
-    if (known.has(key)) continue;
-    const entry = BY_KEY.get(key);
-    if (entry?.file === "platform") {
-      errors.push(`${key} 是实例运行时项，写在 sites/<站点>/platform.env，不要写进公网入口文件。`);
-      continue;
-    }
-    if (entry?.file === "xknot") {
-      errors.push(`${key} 是 XKnot 接入项，写在 sites/<站点>/xknot.env，不要写进公网入口文件。`);
-      continue;
-    }
-    if (RETIRED_KEYS.has(key)) {
-      warnings.push(`${key} 已经删除（Linux 实例主机专用的项，main 只支持 macOS + launchd），这一行可以删掉。`);
-      continue;
-    }
-    warnings.push(`${key} 不在 packages/knot-config/src/schema.mjs 里，可能拼错了，或者已经废弃。`);
-  }
-
-  return { errors, warnings };
-}
-
-// 这些键只属于开发机或入口，实例主机的运行时文件里出现就是配错了。
-export const FORBIDDEN_PLATFORM_KEYS = [
-  "KNOT_ENTRY_SSH_KEY",
-  "KNOT_DEPLOY_SSH",
-  "KNOT_DEPLOY_SSH_KEY",
-  "KNOT_ENTRY_CERT",
-  "KNOT_ENTRY_KEY",
-];
+// 这些键只属于开发机，实例主机的运行时文件里出现就是配错了。
+export const FORBIDDEN_PLATFORM_KEYS = ["KNOT_DEPLOY_SSH", "KNOT_DEPLOY_SSH_KEY"];
 
 // 已经删掉的键：main 只保留 macOS + launchd，Linux 实例主机连同它的两个配置项一起
 // 从这个仓库移走。旧机器的 platform.env 里可能还留着，部署时静默清掉并说一句；
@@ -1469,9 +1197,9 @@ const SITE_HEADER = `# Knot 站点配置。
 # 这份文件由 packages/knot-config/src/schema.mjs 生成，不要手改；改配置项请改 schema 后跑
 #   node ops/scripts/config.mjs template --write
 #
-# 同一个文件既给 local 部署用，也给 xknot.si 子域部署用。
-# 一个站点目录只描述一种部署方式：local 用 KNOT_ENTRY_ENABLED=0，
-# 接入 xknot.si 子域用 KNOT_ENTRY_ENABLED=1。`;
+# 这一个文件同时描述两种形态：只在本机（KNOT_DOMAIN 留空），
+# 以及接上 xknot.si 子域（KNOT_DOMAIN 与 KNOT_PUBLIC_ORIGIN 指向签发的子域）。
+# 入口侧的 nginx、证书与隧道账号由中枢开通，这里不描述。`;
 
 const PLATFORM_HEADER = `# 实例运行时配置模板。由 packages/knot-config/src/schema.mjs 生成。
 #
@@ -1624,9 +1352,9 @@ export function renderDocs() {
     "",
     "## 官方部署方式",
     "",
-    "只看对外形态，有两种：**只在本机**（`KNOT_DOMAIN=` 留空、`KNOT_ENTRY_ENABLED=0`、只绑回环地址）和",
-    "**xknot.si 二级子域**（`KNOT_DOMAIN=<标签>.xknot.si`，走回源隧道）。实例主机是本机还是另一台机器，两种都成立：",
-    "开发机接子域时 `KNOT_ENTRY_ENABLED` 可以是 `0`，入口由中枢自动接通写好，本机只跑隧道与内容。",
+    "只看对外形态，有两种：**只在本机**（`KNOT_DOMAIN=` 留空、只绑回环地址）和",
+    "**xknot.si 二级子域**（`KNOT_DOMAIN=<标签>.xknot.si`，走回源隧道）。实例主机是本机还是另一台机器，两种都成立。",
+    "子域的入口 nginx、证书与隧道账号由中枢开通并维护，实例这一侧只跑隧道与内容。",
     "独立域名、内网公开、固定公网 IP 直连都不在官方范围内，属于用户改造。",
     "",
     "## 三个边界",
@@ -1644,11 +1372,11 @@ export function renderDocs() {
     "",
     "| 文件 | 放什么 | 谁写 |",
     "| --- | --- | --- |",
-    "| `sites/<站点>/site.env` | 域名、主机、端口、路径、入口、隧道。不含密码 | 运维 |",
+    "| `sites/<站点>/site.env` | 域名、主机、端口、路径、隧道开关。不含密码 | 运维 |",
     "| `sites/<站点>/profile.json` | 自述区：名称、默认语种、一句话介绍、详细介绍、logo、主理人、联系方式、地区、时区、标签（十项扁平字段）。不进版本库 | 主理人，在 `/admin` 的 XKnot 栏编辑 |",
     "| `sites/<站点>/platform.env` | SMTP 密码、价格初值、管理令牌。权限 600 | 部署脚本 |",
     "| `sites/<站点>/xknot.env` | 实例 id、中枢地址、签发日期与委托发信凭据。权限 600 | 中枢签发，`join-xknot.sh` 写入 |",
-    "| `sites/<站点>/entry.<标签>.xknot.si.env` | 接入 xknot.si 子域时的入口：域名、静态根、conf、证书。一个站点一份 | 运维 |",
+    "| `sites/<站点>/tunnel.env` | 回源隧道参数：账号、入口主机、中枢分配的端口、私钥文件名。权限 600 | 中枢开通时写入，`/admin` 的 XKnot 栏重新接通也写它 |",
     "| `sites/<站点>/agents/` | Internal Personal Agent 的授权码，权限 700 | 脚本 |",
     "",
     "**部署与接入是两条独立的线。** `deploy-site.sh` 只读 `site.env` 与 `platform.env`；",
@@ -1718,12 +1446,10 @@ export function renderDocs() {
     "| --- | --- |"
   );
   for (const rule of RULES) {
-    const condition =
-      rule.id === "entry-ssh" ? "`KNOT_ENTRY_ENABLED=1`" : rule.id === "external-db" ? "`KNOT_DB_MODE=external`" : "—";
+    const condition = rule.id === "external-db" ? "`KNOT_DB_MODE=external`" : "—";
     lines.push(`| ${rule.message} | ${condition} |`);
   }
   lines.push("| 接子域时必须写 KNOT_PUBLIC_ORIGIN=https://<标签>.xknot.si，且主机名与 KNOT_DOMAIN 一致。 | `KNOT_DOMAIN` 非空 |");
-  lines.push("| 自己推入口（`KNOT_ENTRY_ENABLED=1`）时必须设 KNOT_TUNNEL=1；入口由中枢自动接通时隧道写在 `tunnel.env`，这里不强制。 | `KNOT_DOMAIN` 非空 |");
   lines.push("| 不接子域时 KNOT_PUBLIC_ORIGIN 只认回环地址，也不建隧道。 | `KNOT_DOMAIN` 为空 |");
   lines.push("");
   return `${lines.join("\n")}\n`;

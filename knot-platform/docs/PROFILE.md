@@ -81,7 +81,7 @@
 
 `/api/federation/profile` 只读，不接受写入：主理人改档案只在本机 `/admin` 里做，中枢没有收件接口。
 
-入口首页的 `title`、`description`、Open Graph 与 `<noscript>` 简介也来自这份档案，但它们是**推入口时生成的静态 HTML**，不是每次请求现算：改完档案要重推一次入口（`push-entry.sh`）才会换掉。生成规则见 [`ops/entry/README.md`](../ops/entry/README.md)。
+首页的 `title`、`description`、Open Graph 与 `<noscript>` 简介也来自这份档案，由 Backend 在每次返回 `index.html` 时按当前档案重写（[`backend/src/siteHtml.js`](../backend/src/siteHtml.js)），改完档案刷新即可，不用重新部署。
 
 ## 5. 在 /admin 里编辑
 

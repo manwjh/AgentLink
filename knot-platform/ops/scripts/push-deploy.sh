@@ -7,7 +7,6 @@
 # 用法：
 #   ./ops/scripts/push-deploy.sh --site local               # local：本机整套系统，不 ssh
 #   ./ops/scripts/push-deploy.sh --site wang                # xknot.si 子域：装实例主机
-#   ./ops/scripts/push-deploy.sh --site wang --entry        # 装完再推 xknot.si 子域入口
 #   ./ops/scripts/push-deploy.sh --site wang --no-build    # 用本地最新的发布包
 #   ./ops/scripts/push-deploy.sh --site wang --artifact artifacts/knot-0.2.0-abc1234-darwin-arm64.tar.gz
 #   ./ops/scripts/push-deploy.sh --site wang --bootstrap   # 先让目标机补 Node/Postgres，再部署
@@ -34,7 +33,6 @@ SITE_ARG=""
 ARTIFACT_ARG=""
 BUILD=1
 SKIP_TEST=0
-PUSH_ENTRY=0
 DRY_RUN=0
 RUNTIME_ARG=""
 BOOTSTRAP=0
@@ -56,10 +54,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-test)
       SKIP_TEST=1
-      shift
-      ;;
-    --entry)
-      PUSH_ENTRY=1
       shift
       ;;
     --dry-run)
@@ -100,12 +94,6 @@ knot_require KNOT_PUBLIC_ORIGIN "在 sites/$KNOT_SITE/site.env 里写 KNOT_PUBLI
 LOCAL_DEPLOY=0
 if [[ -z "${KNOT_DEPLOY_SSH:-}" ]]; then
   LOCAL_DEPLOY=1
-fi
-
-# 纯本地部署不该顺带推入口主机。配置里 KNOT_ENTRY_ENABLED=0 时，--entry 直接报错，
-# 免得以为在测本地、实际上把入口改了。
-if [[ "$PUSH_ENTRY" == 1 ]] && ! knot_enabled KNOT_ENTRY_ENABLED; then
-  knot_fail "当前站点配置 KNOT_ENTRY_ENABLED=0，不能加 --entry。要推入口请用带 KNOT_ENTRY_ENABLED=1 的配置。"
 fi
 
 # 先在开发机校验一遍，别把错的配置运到实例主机再回滚。
@@ -166,11 +154,12 @@ if [[ "$LOCAL_DEPLOY" == 1 ]]; then
   if [[ "$(cd "$DEPLOY_DIR/sites/$KNOT_SITE" && pwd -P)" != "$(cd "$KNOT_SITE_DIR" && pwd -P)" ]]; then
     cp "$KNOT_SITE_ENV" "$DEPLOY_DIR/sites/$KNOT_SITE/site.env"
     chmod 600 "$DEPLOY_DIR/sites/$KNOT_SITE/site.env"
-    for entry_file in "$KNOT_SITE_DIR"/entry.*.env; do
-      [[ -f "$entry_file" ]] || continue
-      cp "$entry_file" "$DEPLOY_DIR/sites/$KNOT_SITE/$(basename "$entry_file")"
-      chmod 600 "$DEPLOY_DIR/sites/$KNOT_SITE/$(basename "$entry_file")"
-    done
+    # 隧道参数由中枢开通时写在这一侧。部署根还没有这一份时才带过去：开通流程
+    # 写的那份是活的，用仓库里的副本覆盖会换掉正在用的账号或端口。
+    if [[ -f "$KNOT_SITE_DIR/tunnel.env" && ! -f "$DEPLOY_DIR/sites/$KNOT_SITE/tunnel.env" ]]; then
+      cp "$KNOT_SITE_DIR/tunnel.env" "$DEPLOY_DIR/sites/$KNOT_SITE/tunnel.env"
+      chmod 600 "$DEPLOY_DIR/sites/$KNOT_SITE/tunnel.env"
+    fi
   fi
   DEPLOY_ARGS=(--site "$KNOT_SITE" --deploy-root "$DEPLOY_DIR" --artifact "$ARTIFACT")
   [[ -n "$RUNTIME_ARG" ]] && DEPLOY_ARGS+=(--runtime "$RUNTIME_ARG")
@@ -196,19 +185,7 @@ if [[ "$LOCAL_DEPLOY" == 1 ]]; then
   echo "OK: $KNOT_PUBLIC_ORIGIN"
   echo "    $REL_NAME"
   echo "    本机 http://127.0.0.1:$KNOT_PORT"
-  if ! knot_enabled KNOT_ENTRY_ENABLED; then
-    echo "    KNOT_ENTRY_ENABLED=0：这次没有推公网入口。"
-  elif [[ "$PUSH_ENTRY" != 1 ]]; then
-    knot_warn "入口没有更新：各入口的静态根还是上一版 dist，而 /api 已经指向新后端。
-    要一起推加 --entry：./ops/scripts/push-deploy.sh --site $KNOT_SITE --entry"
-  fi
   echo "    登录：./ops/scripts/local-login.sh --site $KNOT_SITE"
-
-  if [[ "$PUSH_ENTRY" == 1 ]]; then
-    echo "==> push entry"
-    ENTRY_ARGS=(--site "$KNOT_SITE")
-    "$SCRIPT_DIR/push-entry.sh" "${ENTRY_ARGS[@]}"
-  fi
   exit 0
 fi
 
@@ -304,14 +281,18 @@ REMOTE_SITE="sites/$KNOT_SITE"
 echo "==> site → $KNOT_DEPLOY_SSH:$DEPLOY_DIR/$REMOTE_SITE/site.env"
 "${RUN_SSH[@]}" "$KNOT_DEPLOY_SSH" "install -m 600 /dev/null '$DEPLOY_DIR/$REMOTE_SITE/site.env' && cat > '$DEPLOY_DIR/$REMOTE_SITE/site.env'" <"$KNOT_SITE_ENV"
 
-# 子域入口也随站点走：目标机上的 push-discover.sh 要按入口找静态根，
-# 在目标机上补推入口主机时也要读这份文件。
-for entry_file in "$KNOT_SITE_DIR"/entry.*.env; do
-  [[ -f "$entry_file" ]] || continue
-  REMOTE_ENTRY="$REMOTE_SITE/$(basename "$entry_file")"
-  echo "==> entry → $KNOT_DEPLOY_SSH:$DEPLOY_DIR/$REMOTE_ENTRY"
-  "${RUN_SSH[@]}" "$KNOT_DEPLOY_SSH" "install -m 600 /dev/null '$DEPLOY_DIR/$REMOTE_ENTRY' && cat > '$DEPLOY_DIR/$REMOTE_ENTRY'" <"$entry_file"
-done
+# 隧道参数与私钥同在 sites/<站点>/tunnel.env：它决定目标机装不装隧道单元、
+# 探不探公网入口，也决定账号与端口。目标机还没有这一份时才传过去——开通流程
+# 在实例上写的那份是活的，开发机上的副本可能停在签发那一刻，用它覆盖会换掉
+# 正在用的账号或端口。
+if [[ -f "$KNOT_SITE_DIR/tunnel.env" ]]; then
+  if "${RUN_SSH[@]}" "$KNOT_DEPLOY_SSH" "test -f '$DEPLOY_DIR/$REMOTE_SITE/tunnel.env'"; then
+    echo "==> 目标机已有 $REMOTE_SITE/tunnel.env，保留（以开通流程写的那份为准）"
+  else
+    echo "==> site → $KNOT_DEPLOY_SSH:$DEPLOY_DIR/$REMOTE_SITE/tunnel.env"
+    "${RUN_SSH[@]}" "$KNOT_DEPLOY_SSH" "install -m 600 /dev/null '$DEPLOY_DIR/$REMOTE_SITE/tunnel.env' && cat > '$DEPLOY_DIR/$REMOTE_SITE/tunnel.env'" <"$KNOT_SITE_DIR/tunnel.env"
+  fi
+fi
 
 # ---- 5. 在目标机解包并安装 ----
 echo "==> remote install"
@@ -425,17 +406,3 @@ echo "web $(remote_code /)"
 echo "OK: $KNOT_PUBLIC_ORIGIN"
 echo "    $REL_NAME"
 echo "    实例主机 ${KNOT_DEPLOY_SSH#*@} 上的 127.0.0.1:${KNOT_PORT}（在本机验，不经内网直连）"
-if ! knot_enabled KNOT_ENTRY_ENABLED; then
-  echo "    KNOT_ENTRY_ENABLED=0：这次没有推公网入口。"
-elif [[ "$PUSH_ENTRY" != 1 ]]; then
-  # KNOT_ENTRY_ENABLED=1 但没带 --entry：入口仍是上一版页面。
-  # 这不算错误（有时只想起实例主机），但接口已经是新的、页面还是旧的，
-  # 表现就是「本地能看到内容，公网域名什么都没有」。必须说出来。
-  knot_warn "入口没有更新：各入口的静态根还是上一版 dist，而 /api 已经指向新后端。
-    要一起推加 --entry：./ops/scripts/push-deploy.sh --site $KNOT_SITE --entry"
-fi
-
-if [[ "$PUSH_ENTRY" == 1 ]]; then
-  echo "==> push entry"
-  "$SCRIPT_DIR/push-entry.sh" --site "$KNOT_SITE"
-fi

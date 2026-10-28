@@ -173,7 +173,7 @@ Access has only one shape; identity is the `url` itself, with no second axis:
 
 | `federation.json` `mode` | Identity | Entry and tunnel |
 |------|------|------------|
-| `subdomain` | `https://<label>.xknot.si`, hub-issued | the entry hosts the static page, `/api` returns through the SSH reverse tunnel; `tunnel` required |
+| `subdomain` | `https://<label>.xknot.si`, hub-issued | the entry holds the placeholder, certificate and public snapshot; pages and `/api` return through the SSH reverse tunnel; `tunnel` required |
 
 The `mode` field is kept, with the only value `subdomain`. The probe address is always `url` + `/api/health`. The roster `host` and the manifest `url`'s hostname must match, and both fall under `xknot.si`.
 
@@ -576,7 +576,7 @@ Rules:
 - Writing: the instance persists it along its existing access-material write path (`knot-platform` is `join-xknot.sh --payload`), then restarts the Backend to apply.
 - Transfer: one-time claim, `0600`, not in chat, not in mail bodies, not in version control.
 - Storage: the instance keeps it itself; an instance not joining the federation does not need this file and works as usual.
-- Scope: **access only**. Domain, port, entry host, tunnel account, and static-file ownership are deployment topology, recorded by the instance's own deployment plan; the hub does not issue or validate them.
+- Scope: **credentials only**. Domain, port, entry host and tunnel account are topology: allocated by the hub, recorded in the roster, and delivered to the instance through `progress` (`handoff`). The access file does not repeat or validate them.
 - Reissue: re-signing for the same instance revokes its old relay credential (there is no separate reclaim besides `relay-revoke`, so do not keep old files); hub address and site address are unchanged, other keys are rewritten per the current manifest.
 - Mismatch: the instance uses only its latest file; combining two files sends with the old credential and the hub rejects as `token_revoked`.
 - Retired keys: a key outside the current contract (renamed or dropped) makes the instance reject the whole file and leave the existing one untouched. The receiver does not rename keys or wave such a key through as an ordinary unknown: writing it in means nobody reads it, and the missing tier row is only noticed later on the portal. A new key has to come from a re-sign by the hub on the current version.

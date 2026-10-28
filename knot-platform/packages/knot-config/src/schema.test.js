@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 import {
   GROUPS,
   KEYS,
-  checkEntryFile,
   checkJoin,
   checkPlatform,
   checkRuntime,
@@ -38,7 +37,7 @@ test("every key is registered once, in a known group and a known file", () => {
     assert.ok(!seen.has(entry.key), `${entry.key} 登记了两次`);
     seen.add(entry.key);
     assert.ok(groups.has(entry.group), `${entry.key} 的分组 ${entry.group} 不存在`);
-    assert.ok(["site", "platform", "xknot", "entry"].includes(entry.file), `${entry.key} 的 file 不对`);
+    assert.ok(["site", "platform", "xknot"].includes(entry.file), `${entry.key} 的 file 不对`);
     assert.ok(entry.desc && entry.desc.length > 4, `${entry.key} 缺说明`);
     assert.ok(entry.file !== "site" || !entry.runtime || /^[A-Z][A-Z0-9_]*$/.test(entry.runtime));
   }
@@ -55,7 +54,6 @@ test("a complete local site config passes", () => {
   const result = checkSite({
     KNOT_PUBLIC_ORIGIN: "http://127.0.0.1:8080",
     KNOT_ADMIN_EMAIL: "admin@example.com",
-    KNOT_ENTRY_ENABLED: "0",
     KNOT_BACKUP_DIR: "$HOME/knot/backups",
   });
   assert.deepEqual(result.errors, []);
@@ -66,8 +64,6 @@ test("a complete xknot.si subdomain config passes", () => {
     KNOT_PUBLIC_ORIGIN: "https://wang.xknot.si",
     KNOT_DOMAIN: "wang.xknot.si",
     KNOT_ADMIN_EMAIL: "admin@example.com",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
     KNOT_TUNNEL: "1",
     KNOT_BACKUP_DIR: "$HOME/knot/backups",
   });
@@ -98,11 +94,11 @@ test("types are checked, not just presence", () => {
 
 test("cross-key rules fire only when their condition holds", () => {
   const base = { KNOT_ADMIN_EMAIL: "admin@example.com", KNOT_BACKUP_DIR: "/backups" };
-  assert.deepEqual(checkSite({ ...base, KNOT_ENTRY_ENABLED: "0" }).errors, []);
-  assert.ok(checkSite({ ...base, KNOT_ENTRY_ENABLED: "1" }).errors.some((m) => m.includes("KNOT_ENTRY_SSH")));
+  assert.deepEqual(checkSite(base).errors, []);
   assert.ok(
     checkSite({ ...base, KNOT_DB_MODE: "external" }).errors.some((m) => m.includes("KNOT_DATABASE_URL"))
   );
+  assert.deepEqual(checkSite({ ...base, KNOT_DB_MODE: "external", KNOT_DATABASE_URL: "postgres://x/y" }).errors, []);
 });
 
 test("unknown site keys are reported as warnings, not errors", () => {
@@ -128,44 +124,22 @@ test("a loopback-only site is not warned about missing backups", () => {
     KNOT_ADMIN_EMAIL: "dev@example.com",
     KNOT_PUBLIC_ORIGIN: "https://wang.xknot.si",
     KNOT_DOMAIN: "wang.xknot.si",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
     KNOT_TUNNEL: "1",
   });
   assert.ok(publicSite.warnings.some((message) => message.includes("KNOT_BACKUP_DIR")));
 });
 
 test("a local host can also carry an issued subdomain", () => {
-  // 开发机整套系统都在这台机器上，同样可以领子域接进联邦：入口 conf 由中枢自动接通写，
-  // site.env 保持 KNOT_ENTRY_ENABLED=0，隧道写在 tunnel.env（cpswang 就是这种形态）。
+  // 整套系统都在一台机器上，同样可以领子域接进联邦：入口由中枢开通，
+  // 隧道参数写在 tunnel.env，site.env 只描述站点自己。
   const result = checkSite({
     KNOT_ADMIN_EMAIL: "dev@example.com",
     KNOT_PUBLIC_ORIGIN: "https://cpswang.xknot.si",
     KNOT_DOMAIN: "cpswang.xknot.si",
-    KNOT_ENTRY_ENABLED: "0",
     KNOT_TUNNEL: "0",
   });
   assert.deepEqual(result.errors, []);
   assert.ok(result.warnings.some((message) => message.includes("KNOT_BACKUP_DIR")));
-});
-
-test("pushing the entry yourself still needs the tunnel and a domain", () => {
-  const noDomain = checkSite({
-    KNOT_ADMIN_EMAIL: "dev@example.com",
-    KNOT_PUBLIC_ORIGIN: "http://127.0.0.1:8081",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
-  });
-  assert.ok(noDomain.errors.some((message) => message.includes("必须写 KNOT_DOMAIN")));
-
-  const noTunnel = checkSite({
-    KNOT_ADMIN_EMAIL: "dev@example.com",
-    KNOT_PUBLIC_ORIGIN: "https://wang.xknot.si",
-    KNOT_DOMAIN: "wang.xknot.si",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
-  });
-  assert.ok(noTunnel.errors.some((message) => message.includes("KNOT_TUNNEL=1")));
 });
 
 test("a public site can opt out of backups with null", () => {
@@ -173,8 +147,6 @@ test("a public site can opt out of backups with null", () => {
     KNOT_ADMIN_EMAIL: "admin@example.com",
     KNOT_PUBLIC_ORIGIN: "https://wang.xknot.si",
     KNOT_DOMAIN: "wang.xknot.si",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
     KNOT_TUNNEL: "1",
     KNOT_BACKUP_DIR: "null",
   });
@@ -186,8 +158,6 @@ test("a public site can opt out of backups with null", () => {
     KNOT_ADMIN_EMAIL: "admin@example.com",
     KNOT_PUBLIC_ORIGIN: "https://wang.xknot.si",
     KNOT_DOMAIN: "wang.xknot.si",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
     KNOT_TUNNEL: "1",
   });
   assert.ok(undecided.warnings.some((message) => message.includes("写 null")));
@@ -218,16 +188,12 @@ test("subdomain deployment needs both a domain and a matching public origin", ()
   const missingDomain = checkSite({
     KNOT_ADMIN_EMAIL: "dev@example.com",
     KNOT_PUBLIC_ORIGIN: "https://wang.xknot.si",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
   });
   assert.ok(missingDomain.errors.some((message) => message.includes("必须写 KNOT_DOMAIN")));
 
   const missingOrigin = checkSite({
     KNOT_ADMIN_EMAIL: "dev@example.com",
     KNOT_DOMAIN: "wang.xknot.si",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
   });
   assert.ok(missingOrigin.errors.some((message) => message.includes("必须写 KNOT_PUBLIC_ORIGIN")));
 
@@ -235,26 +201,13 @@ test("subdomain deployment needs both a domain and a matching public origin", ()
     KNOT_ADMIN_EMAIL: "dev@example.com",
     KNOT_PUBLIC_ORIGIN: "https://other.xknot.si",
     KNOT_DOMAIN: "wang.xknot.si",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
   });
   assert.ok(mismatched.errors.some((message) => message.includes("不一致")));
-
-  const noTunnel = checkSite({
-    KNOT_ADMIN_EMAIL: "dev@example.com",
-    KNOT_PUBLIC_ORIGIN: "https://wang.xknot.si",
-    KNOT_DOMAIN: "wang.xknot.si",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
-  });
-  assert.ok(noTunnel.errors.some((message) => message.includes("KNOT_TUNNEL=1")));
 
   const insecure = checkSite({
     KNOT_ADMIN_EMAIL: "dev@example.com",
     KNOT_PUBLIC_ORIGIN: "http://wang.xknot.si",
     KNOT_DOMAIN: "wang.xknot.si",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
     KNOT_TUNNEL: "1",
   });
   assert.ok(insecure.errors.some((message) => message.includes("https://")));
@@ -265,15 +218,13 @@ test("subdomain deployment must use an xknot.si issued domain", () => {
     KNOT_ADMIN_EMAIL: "dev@example.com",
     KNOT_PUBLIC_ORIGIN: "https://knot.example.com",
     KNOT_DOMAIN: "knot.example.com",
-    KNOT_ENTRY_ENABLED: "1",
-    KNOT_ENTRY_SSH: "ec2-user@entry-host",
   });
   assert.ok(result.errors.some((message) => message.includes("<标签>.xknot.si")));
 });
 
 test("a platform runtime file may not carry dev-only keys", () => {
-  const result = checkPlatform("PORT=8080\nKNOT_ENTRY_SSH_KEY=/Users/me/.ssh/id_rsa\n");
-  assert.ok(result.errors.some((message) => message.includes("KNOT_ENTRY_SSH_KEY")));
+  const result = checkPlatform("PORT=8080\nKNOT_DEPLOY_SSH_KEY=/Users/me/.ssh/id_rsa\n");
+  assert.ok(result.errors.some((message) => message.includes("KNOT_DEPLOY_SSH_KEY")));
 });
 
 test("a platform runtime file warns on unknown keys and loose permissions", () => {
@@ -369,17 +320,21 @@ test("derived values follow site.env without being written back", () => {
   const env = {
     KNOT_PUBLIC_ORIGIN: "https://knot.example.com:8443",
     KNOT_PORT: "9090",
-    KNOT_ENTRY_PROXY_PORT: "18081",
-    KNOT_ENTRY_SSH: "ec2-user@203.0.113.10",
+    // 隧道账号与端口由中枢签发、写在 tunnel.env；这里只验证「写了就用它」。
+    KNOT_TUNNEL_SSH: "knot-tunnel-lab",
+    KNOT_TUNNEL_REMOTE_PORT: "18081",
   };
   const byKey = new Map(KEYS.map((entry) => [entry.key, entry]));
   const ctx = { root: "/srv/knot", home: "/Users/me", expand: true };
   assert.equal(resolve(byKey.get("KNOT_DOMAIN"), env, ctx), "");
-  assert.equal(resolve(byKey.get("KNOT_TUNNEL_SSH"), env, ctx), "knot-tunnel@203.0.113.10");
+  assert.equal(resolve(byKey.get("KNOT_TUNNEL_SSH"), env, ctx), "knot-tunnel-lab");
   assert.equal(resolve(byKey.get("KNOT_TUNNEL_LOCAL_PORT"), env, ctx), "9090");
   assert.equal(resolve(byKey.get("KNOT_TUNNEL_REMOTE_PORT"), env, ctx), "18081");
+  // 没写就是空：不猜一个账号，也不猜一个端口。
+  assert.equal(resolve(byKey.get("KNOT_TUNNEL_SSH"), { KNOT_PORT: "9090" }, ctx), "");
+  assert.equal(resolve(byKey.get("KNOT_TUNNEL_REMOTE_PORT"), { KNOT_PORT: "9090" }, ctx), "");
   assert.equal(resolve(byKey.get("KNOT_UPLOAD_DIR"), {}, ctx), "/srv/knot/var/uploads");
-  assert.equal(resolve(byKey.get("KNOT_TUNNEL_KEY"), {}, ctx), "/Users/me/.ssh/knot-entry");
+  assert.equal(resolve(byKey.get("KNOT_TUNNEL_KEY"), {}, ctx), "tunnel_ed25519");
   // 展示远端路径时不展开本机的 home。
   assert.equal(
     resolve(byKey.get("KNOT_DEPLOY_DIR"), {}, { root: "/srv/knot", home: "/Users/me" }),
@@ -514,9 +469,6 @@ test("retired keys say they are gone instead of looking like a typo", () => {
   assert.ok(site.warnings.some((message) => message.includes("KNOT_SERVICE_USER") && message.includes("已经删除")));
   assert.ok(!site.warnings.some((message) => message.includes("可能拼错了")));
 
-  const entry = checkEntryFile({ KNOT_DOMAIN: "wang.xknot.si", KNOT_ENTRY_WEB_ROOT: "/var/www/wang", KNOT_SYSTEMD_DIR: "/etc/systemd/system" }, {});
-  assert.deepEqual(entry.errors, []);
-  assert.ok(entry.warnings.some((message) => message.includes("KNOT_SYSTEMD_DIR") && message.includes("已经删除")));
 });
 
 // ---- XKnot 接入与部署分开 ----
@@ -610,54 +562,3 @@ test("bootstrap defaults come from the schema instead of a second copy", () => {
   }
 });
 
-// 公网入口：一个公网入口一份 entry.<域名>.env。入口是叠加层，域名是它的主键。
-test("an entry entry needs a domain that matches its file name", () => {
-  const base = {
-    KNOT_DOMAIN: "wang.xknot.si",
-    KNOT_ENTRY_WEB_ROOT: "/var/www/wang",
-    KNOT_ENTRY_SERVE: "static",
-  };
-  const ok = checkEntryFile(base, { file: "/sites/x/entry.wang.xknot.si.env" });
-  assert.deepEqual(ok.errors, []);
-
-  const mismatched = checkEntryFile(base, { file: "/sites/x/entry.other.xknot.si.env" });
-  assert.ok(mismatched.errors.some((m) => /文件名与 KNOT_DOMAIN 不一致/.test(m)));
-
-  const missing = checkEntryFile({ KNOT_ENTRY_WEB_ROOT: "/var/www/wang" }, {});
-  assert.ok(missing.errors.some((m) => /必须写 KNOT_DOMAIN/.test(m)));
-});
-
-test("an entry entry rejects a server kind that is neither static nor proxy", () => {
-  const result = checkEntryFile(
-    {
-      KNOT_DOMAIN: "wang.xknot.si",
-      KNOT_ENTRY_WEB_ROOT: "/var/www/wang",
-      KNOT_ENTRY_SERVE: "rsync",
-    },
-    {},
-  );
-  assert.ok(result.errors.some((m) => m.includes("KNOT_ENTRY_SERVE")));
-});
-
-test("an entry entry keeps the join and platform keys out", () => {
-  const result = checkEntryFile(
-    {
-      KNOT_DOMAIN: "wang.xknot.si",
-      KNOT_ENTRY_WEB_ROOT: "/var/www/wang",
-      XKNOT_HUB_RELAY_TOKEN: "xkr_abcdefgh",
-      KNOT_ADMIN_TOKEN: "secret",
-    },
-    {},
-  );
-  assert.ok(result.errors.some((m) => m.includes("XKNOT_HUB_RELAY_TOKEN")));
-  assert.ok(result.errors.some((m) => m.includes("KNOT_ADMIN_TOKEN")));
-});
-
-// 证书与私钥可以留空由域名推导；推导得出来就不算缺。
-test("an entry entry accepts a certificate derived from its domain", () => {
-  const result = checkEntryFile(
-    { KNOT_DOMAIN: "wang.xknot.si", KNOT_ENTRY_WEB_ROOT: "/var/www/wang", KNOT_ENTRY_SSL: "1" },
-    {},
-  );
-  assert.deepEqual(result.errors, []);
-});

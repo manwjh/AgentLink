@@ -464,7 +464,7 @@ function renderTraffic(row) {
       el(
         "p",
         { class: "traffic-empty" },
-        "还没有采集到：确认入口装了 knot-log.conf，且 xknot-traffic.timer 在跑。"
+        "还没有采集到：确认入口 conf 里有 access_log，且 xknot-traffic.timer 在跑。"
       ),
     ]);
   }
@@ -691,7 +691,7 @@ function renderInstanceConfig(row, id) {
               `${row.traffic.date} · ${row.traffic.requests} 次 · ${formatBytes(row.traffic.bytes)}`,
               el("span", { class: "cfg-missing" }, "　入口 nginx 观测，不含实例自己记的站内行为"),
             ])
-          : el("span", { class: "cfg-missing" }, "未采集：入口还没装 knot-log.conf")
+          : el("span", { class: "cfg-missing" }, "未采集：入口 conf 里还没有 access_log")
       ),
       line(
         "探测地址",

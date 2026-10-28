@@ -191,10 +191,10 @@ The hub's code lives in this directory and is not merged into `knot-platform/`. 
 | Location | Content |
 |------|------|
 | [`knot-platform/`](../knot-platform) | **independent project**: the instance implementation, Backend, WebUI, and shared packages. This is what `xxx.xknot.si` runs today; swapping the implementation does not affect the hub |
-| [`knot-platform/ops/`](../knot-platform/ops) | the instance's deployment, entry, backup, and patrol scripts; the subdomain entry templates live in `ops/entry/` |
+| [`knot-platform/ops/`](../knot-platform/ops) | the instance's deployment, backup, and patrol scripts |
 | [`docs/`](../docs) | **root public assets**: copyright and trademark, LOGO master, API entry index, federation-layer docs; not part of the instance side |
 
-The direction is one-way: the hub only probes an instance's `/api/health` using the manifest's `url`; it does not read the instance's code, database, or processes, and the instance does not change the hub's manifest. The two sides meet only through two contracts — the probe ([docs/FEDERATION.md](docs/FEDERATION.md) section 5) and the access material (section 7.4). Subdomain issuance and manifest listing are policies here ([docs/JOIN.md](docs/JOIN.md)); how the entry and tunnel are realized is the instance side's business ([`knot-platform/ops/entry/README.md`](../knot-platform/ops/entry/README.md)).
+The direction is one-way: the hub only probes an instance's `/api/health` using the manifest's `url`; it does not read the instance's code, database, or processes, and the instance does not change the hub's manifest. The two sides meet only through two contracts — the probe ([docs/FEDERATION.md](docs/FEDERATION.md) section 5) and the access material (section 7.4). Subdomain issuance, the entry itself, and manifest listing are policies here ([docs/JOIN.md](docs/JOIN.md)); the instance side only runs the outbound tunnel ([`knot-platform/ops/README.md`](../knot-platform/ops/README.md) section 4).
 
 ## Listing and billing
 

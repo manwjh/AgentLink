@@ -267,6 +267,48 @@ export function accountOf(instanceId) {
   return `knot-tunnel-${instanceId}`;
 }
 
+/**
+ * 接管一个已经在清单与名册里的实例。
+ *
+ * 有些条目是在自动签发之前接进来的：入口 conf 是别人手写的，库里的接通记录
+ * 也不存在。它们和自动签发的条目此后没有区别——入口只由中枢维护，所以补一份
+ * 已验收的 run，让 worker 每轮照常核对 conf、补爬虫入口、按名册对齐隧道参数。
+ *
+ * 不重新签发：账号与端口沿用名册，证书与 DNS 早已就位。公钥指纹留空，
+ * 因为没有申请单可比对；这一步的语义是「从此归中枢管」，不是「重跑一次签发」。
+ */
+export function adoptRun({ instance, member, entryHost = "", now = new Date() }) {
+  const stamp = now.toISOString();
+  const port = Number(member?.tunnel?.port);
+  const account = String(member?.tunnel?.account || "").trim();
+  if (!account) throw new ProvisionError("invalid_account", account || "(空)");
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new ProvisionError("invalid_port", String(member?.tunnel?.port ?? ""));
+  }
+  let host = "";
+  try {
+    host = new URL(String(instance?.url || "")).hostname;
+  } catch {
+    throw new ProvisionError("invalid_url", String(instance?.url ?? ""));
+  }
+  return {
+    applicationId: instance.id,
+    instanceId: instance.id,
+    host,
+    account,
+    port,
+    entryHost,
+    publicKeyHash: null,
+    state: "active",
+    steps: freshSteps().map((step) => ({ ...step, state: "done", at: stamp, note: "接管既有入口" })),
+    attempts: 0,
+    lastError: null,
+    tunnelConfirmedAt: stamp,
+    createdAt: stamp,
+    updatedAt: stamp,
+  };
+}
+
 /** 名册里已有这个实例就沿用它的账号与端口，避免重试时换掉正在用的隧道。 */
 export function tunnelFor({ instanceId, members = [], reserved = [] }) {
   const member = members.find((item) => item.id === instanceId);
@@ -331,8 +373,8 @@ export function renderPlaceholder({ instanceId, name }) {
  * 前者当成空规则（全站放开、也没有 Sitemap 指引），把后者当成无效站点地图。这两条
  * 都不报错，只是安静地什么都没起作用。
  *
- * 生成规则必须与实例自己发的那两条**逐字一致**：同一台机器上还有走静态投放的子域，
- * 它们的这两份文件由实例侧写入。两边内容不同，同一个联盟的站点地图就会分成两种格式。
+ * 生成规则必须与实例自己发的那两条**逐字一致**：入口把这两份写在磁盘上先发出去，
+ * Backend 也按同一规则回同一份。两边内容不同，同一个联盟的站点地图就会分成两种格式。
  * 这是刻意保留的重复——两个项目不互相 import，只靠实现对齐。
  *
  * 只有 `/` 与 `/discover` 是真正的静态页：其余路由要么回源 `/api`，要么是账户态页面。
@@ -385,10 +427,9 @@ export const ENTRY_PROXIED_MARK = "# 入口已接通：整站反代到隧道";
 /**
  * 「这份 conf 由中枢生成」的唯一标记。
  *
- * 入口的 vhost 有两个来源：中枢自动接通（两份都带这一行），以及伙伴自己
- * 跑 `push-entry.sh` 推上来的静态投放（带 `由 ops/scripts/render-config.mjs`）。
- * 中枢只能改自己生成的那种：否则它每 20 秒核对一次，会把伙伴刚推上来的
- * 静态 conf 改回整站反代，两边互相覆盖，谁也不知道最后是谁的配置。
+ * 入口的 vhost 有两个来源：中枢自动接通（每份都带这一行），以及运维手工维护的
+ * conf（不带这一行）。中枢只改自己生成的那种：否则它每 20 秒核对一次，会把手写
+ * 的 conf 改回生成版，两边互相覆盖，谁也不知道最后是谁配置。
  *
  * 判定用「有没有这一行」，不是「内容像不像」：外部 conf 的版式随时会变，
  * 而这一行是我们自己写的，改版式时也不会丢。
@@ -405,10 +446,9 @@ export function isManagedEntryConf(text) {
 //
 // 格式声明写在**每份 vhost 自己**的文件里，名字按子域唯一。两个原因：
 //   1. log_format 只能声明一次，不能每份 conf 都叫 knot_json；
-//   2. conf.d/*.conf 按文件名排序 include，共享的 knot-log.conf 排不到最前，
-//      cpswang 这种域名排在它前面的子域会报 "unknown log format"。
-// 自己声明就不依赖任何文件先被加载。字段与 knot-platform/ops/entry/log.conf.template
-// 必须一致——少一个键，traffic.mjs 就少一列。
+//   2. conf.d/*.conf 按文件名排序 include，共享声明可能排在用到它的子域之后，
+//      那些子域会报 "unknown log format"。自己声明就不依赖任何文件先被加载。
+// 字段与 portal 自己的 ops/xknot.si.conf 必须一致——少一个键，traffic.mjs 就少一列。
 export const ENTRY_ACCESS_LOG = "/var/log/nginx/knot-access.log";
 
 // reload 之后唯一的失败证据。见 reloadNginx() 上面那段。
@@ -475,8 +515,8 @@ function proxyDirectives(indent, upstream, { timeout = "120s" } = {}) {
  * 唯一的例外是 `/discover.json`：它是公开快照，中枢会取回到入口磁盘上，有就用磁盘
  * 那份、没有就回落到隧道。它不是页面，所以不存在「两个来源看到两个站」的问题。
  *
- * 整站反代也要拿到和 static 投放同档的传输层：HTTP/2、gzip、隧道连接复用。
- * 这三项与「页面从磁盘出还是从隧道回」无关；少了它们，每个静态文件都要多穿一次
+ * 整站反代同样要保住传输层：HTTP/2、gzip、隧道连接复用。
+ * 这三项与页面从磁盘出还是从隧道回无关；少了它们，每个静态资源都要多穿一次
  * 跨境往返、按原文传，109KB 的主包会当 109KB 发出去。
  */
 export function renderVhost({ domain, root, port, entry = false }) {
@@ -484,7 +524,7 @@ export function renderVhost({ domain, root, port, entry = false }) {
   const upstream = `knot_entry_${port}`;
   const header = proxied
     ? `# ${domain}：入口 conf，${MANAGED_MARK}。\n${ENTRY_PROXIED_MARK}\n# 整站经本机回环端口 ${port} 回到实例（SSH 反向隧道）。`
-    : `# ${domain}：入口 conf，${MANAGED_MARK}。\n# 静态页落在 ${root}；/api 经本机回环端口 ${port} 回到实例（SSH 反向隧道）。`;
+    : `# ${domain}：入口 conf，${MANAGED_MARK}。\n# 占位页落在 ${root}；/api 经本机回环端口 ${port} 回到实例（SSH 反向隧道）。`;
 
   // 回源统一走 upstream 才能复用连接：一条新 TCP 要穿隧道重建一次 channel，
   // 跨境多一个 RTT。keepalive_timeout 压在 Backend 的 keepAliveTimeout（Node 默认 5s）之下。
@@ -496,7 +536,7 @@ export function renderVhost({ domain, root, port, entry = false }) {
 `;
 
   // 访问日志：格式声明与用户都写在这一份 conf 里，名字按子域唯一。
-  // conf.d 是按文件名顺序 include 的，共享的 knot-log.conf 可能排在后面，
+  // conf.d 是按文件名顺序 include 的，共享声明可能排在用到它的子域之后，
   // 那时 nginx -t 会报 unknown log format，整棵配置树都过不了。
   const formatName = logFormatName(domain);
   const logDirective = `# 访问日志格式（每个子域一份，名字唯一）。聚合端：ops/traffic.mjs。
@@ -514,7 +554,7 @@ log_format ${formatName} escape=json
   // 页面骨架（`/`，SPA 兜底回 index.html）也进同一个 zone，但只留 10 秒：
   //   - 上游对 index.html 发的是 no-cache，不加 proxy_ignore_headers 就一条都存不下；
   //   - 10 秒内的重复导航不必再穿一次隧道；日志里 cache 列能看出命中；
-  //   - 隧道断时 use_stale 还能发上一次的壳（静态投放的同档能力），
+  //   - 隧道断时 use_stale 还能发上一次的壳，
   //     访客看到的是页面打开、数据处报错，而不是白屏；
   //   - 代价：发版后 ≤10 秒内可能有访客拿到旧壳，指向已改名的旧资源。
   //     旧资源在缓存里留 30 天，只有「那个旧资源此前从没被谁取过」才会 404，窗口很小。
@@ -531,9 +571,9 @@ proxy_cache_path /var/cache/nginx/${cacheName} levels=1:2 keys_zone=${cacheName}
 
   const rootLocation = proxied
     ? `    # 上传文件（信息流图片 /display、头像、赞助图）：入口缓存，避免每张图都穿隧道回平台。
-    # 与静态投放的入口同一套语义：缓存键只有 $uri、不含会话，「能不能进共享缓存」
-    # 完全交给后端的 Cache-Control（公开内容 public，只有当事人能读的 private，
-    # 生成失败回退原件 no-store）。所以这里不 ignore 任何头——后端说了算。
+    # 缓存键只有 $uri、不含会话，能不能进共享缓存完全交给后端的 Cache-Control
+    # （公开内容 public，只有当事人能读的 private，生成失败回退原件 no-store）。
+    # 所以这里不 ignore 任何头——后端说了算。
     # 不带尾斜杠：带上之后 nginx 把 /api/web/uploads 当成目录，对 POST 回 301 补斜杠；
     # 浏览器跟随时按 GET 重发、请求体丢掉，选好的图传上去就是 404。
     location ^~ /api/web/uploads {
@@ -619,7 +659,7 @@ ${proxyDirectives(8, upstream)}
         proxy_cache_valid 301 10s;
         # 过期后先把旧的发出去，刷新在后台做：过期那一下也不让访客等隧道。
         proxy_cache_background_update on;
-        # 隧道断了、后端 5xx 了，发上一次的壳。这是静态投放那一档能力，
+        # 隧道断了、后端 5xx 了，发上一次的壳：
         # 没有它，隧道一抖整页就打不开。
         proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
         proxy_cache_lock on;
@@ -894,11 +934,11 @@ async function runDns({ run, host, domain }) {
 
 /** 只有 80 的入口 conf：够 certbot 做 HTTP-01，证书到手前不写 443。 */
 async function runVhost({ run, host, domain, root }) {
-  // 只写中枢自己的 conf：伙伴已经用 push-entry.sh 推过静态入口时，这一步不能盖掉它。
+  // 只写中枢自己的 conf：运维手写的入口不覆盖。
   // 首次开通时文件不存在，isManagedEntryConf(null) 为真，照常写。
   const file = `/etc/nginx/conf.d/${domain}.conf`;
   if (!isManagedEntryConf(await host.readRootFile(file))) {
-    return { note: "入口 conf 由外部管理（静态投放），未覆盖", external: true };
+    return { note: "入口 conf 由外部管理，未覆盖", external: true };
   }
   await host.writeRootFile(file, renderHttpVhost({ domain, root }), "644");
   const tested = await host.sudo(["nginx", "-t"]);
@@ -930,7 +970,7 @@ async function runTls({ run, host, entry, domain, root }) {
   );
   if (issued.code !== 0) throw new ProvisionError("tls_failed", tail(issued.stderr));
   // 证书照签（ACME 校验用的是静态 root，与 conf 归属无关），但 conf 依旧是
-  // 谁写的归谁：外部管理的入口只把证书交给它，不覆盖它的反代/静态配置。
+  // 谁写的归谁：手写的入口只把证书交给它，不覆盖它的配置。
   const file = `/etc/nginx/conf.d/${domain}.conf`;
   if (!isManagedEntryConf(await host.readRootFile(file))) {
     return { note: "证书已签发；入口 conf 由外部管理，未覆盖", external: true };
@@ -1053,18 +1093,21 @@ export async function reloadNginx({
  *
  * 先 nginx -t 再 reload；不通过就把旧内容写回去，不能让一次写坏的 conf
  * 把已经接通的站打掉。
+ *
+ * adopt 只给 `entry-adopt` 用：把一份不是中枢写的 conf 收归自己管。平时一律
+ * 认「谁写的」而不是「内容像不像」，否则两边会互相改写。
  */
-export async function switchEntry({ host, run, entry = true }) {
+export async function switchEntry({ host, run, entry = true, adopt = false }) {
   assertSafeDomain(run);
   const domain = run.host;
   const root = `/var/www/${run.instanceId}`;
   const file = `/etc/nginx/conf.d/${domain}.conf`;
   const current = await host.readRootFile(file);
-  // 伙伴自己跑 push-entry.sh 推上来的静态 conf 不归中枢管。中枢每 20 秒核对一次，
-  // 若在这里覆盖，两边会互相改写：伙伴推静态、中枢改回反代、伙伴再推……
-  // 认「谁写的」而不是「内容像不像」，见 MANAGED_MARK。连它目录里的文件也不碰：
-  // 那份 robots.txt 由实例自己写，中枢插一份进去只会让两个来源互相打脸。
-  if (!isManagedEntryConf(current)) return { changed: false, external: true };
+  if (!adopt && !isManagedEntryConf(current)) return { changed: false, external: true };
+  if (adopt && current != null && !isManagedEntryConf(current)) {
+    // 收归之前先把原样存一份：接管可能改错，留一条能直接放回去的路。
+    await host.writeEntryFile(`${file}.adopted`, current);
+  }
   // 爬虫入口每轮核对一次，文件不在就补。签发那一步只跑一次，已经开通的子域不会再
   // 走一遍；少了这一层，新加的 location 也照样回落到 SPA 兜底，等于没修。
   if (entry) await writeCrawlerEntry({ host, domain, root });

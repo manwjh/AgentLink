@@ -57,8 +57,6 @@ test("every CLI that ships uses the shared helper", () => {
     "ops/openclaw/apply-config.mjs",
     "ops/scripts/config.mjs",
     "ops/scripts/artifact.mjs",
-    "ops/scripts/render-config.mjs",
-    "ops/scripts/entry-html.mjs",
   ];
   for (const rel of must) {
     const text = readFileSync(path.join(APP, rel), "utf8");

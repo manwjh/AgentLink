@@ -26,7 +26,7 @@ import { federationStatus } from "./federation.js";
 import { hubOriginOf } from "./xknotJoin.js";
 import { startTunnelAgent } from "./tunnel.js";
 import { createHtmlRenderer } from "./pageHtml.js";
-import { renderRobots, renderSitemap } from "../../ops/scripts/entry-html.mjs";
+import { renderRobots, renderSitemap } from "./siteHtml.js";
 import { recordPath } from "./recordUrl.js";
 import { pollIntervalMs, startXknotPoller } from "./xknotPoller.js";
 
@@ -67,7 +67,7 @@ app.use(cookieParser());
 app.use(createSessionMiddleware({ pool, sessionCookieName: bootstrap.sessionCookieName }));
 
 // 账户态页面不该被索引：爬虫没有会话，收进去的只会是登录页。
-// 入口 static 投放也在 nginx 里另加一遍，这里管 proxy 投放和本机直连。
+// 入口 nginx 也照同一份路径规则挡一遍，本机直连由这里管。
 const ACCOUNT_PATH = /^\/(?:mine(?:\/submissions)?|notifications|stars|friends|admin)(?:\/|$)/;
 
 // 上传的文件按自己的 MIME 回源。禁止嗅探，避免浏览器把图片当页面执行。
@@ -196,14 +196,12 @@ if (bootstrap.staticWebDir && fs.existsSync(bootstrap.staticWebDir)) {
   const dir = path.resolve(bootstrap.staticWebDir);
   app.use("/assets", express.static(path.join(dir, "assets"), { immutable: true, maxAge: "1y" }));
 
-  // static 投放由入口在推的时候把站点自述写进 HTML（ops/scripts/entry-html.mjs）。
-  // proxy 投放没有那一步：页面由这里发出，同一个渲染函数在请求时补上，站名、简介、
-  // canonical 才不会停留在构建产物里的通用值。两档用一份实现，规则不会分叉。
+  // 页面由这里发出，站点自述在请求时补上：站名、简介、canonical 才不会停留在
+  // 构建产物里的通用值。
   const render = createHtmlRenderer({ dir, profile, origin: bootstrap.publicWebOrigin });
 
-  // robots.txt 与 sitemap.xml 也是同一件事：static 入口由 push-entry 生成，
-  // 反代投放没有任何一步会写它们，于是那些站点等于没有 robots 和站点地图。
-  // 站点地图里必须是绝对地址，所以没配公开地址时宁可不发，也不写一个相对的 loc。
+  // robots.txt 与 sitemap.xml 是同一件事：站点地图里必须是绝对地址，
+  // 没配公开地址时宁可不发，也不写一个相对的 loc。
   for (const [route, type, renderText] of [
     ["/robots.txt", "text/plain; charset=utf-8", renderRobots],
     ["/sitemap.xml", "application/xml; charset=utf-8", renderSitemap],
@@ -218,7 +216,7 @@ if (bootstrap.staticWebDir && fs.existsSync(bootstrap.staticWebDir)) {
   // /discover 有自己的静态壳（canonical 指向 /discover）。没有这份文件时宁可 404，
   // 也不要回 index.html：那样地址是 /discover，canonical 却指着首页。
   //
-  // `.html` 直链只留一份可索引地址，和 static 投放的入口同一个规则：否则同一页有两个
+  // `.html` 直链只留一份可索引地址，入口 nginx 用同一条规则：否则同一页有两个
   // 地址都能打开，爬虫按 canonical 归一之前先把两条都抓一遍。
   app.get("/discover.html", (_req, res) => {
     res.redirect(301, "/discover");

@@ -130,8 +130,8 @@ The partner-side deployment items (which keys to write, which file they go in, i
 | local and remote port | remote `〈1808x〉` → local backend port (Knot default 8080) |
 
 When deploying with `knot-platform`, these land in `sites/<site>/tunnel.env`, written by the instance's own Backend once it reads progress (keys and examples in
-[`../../knot-platform/ops/entry/README.md`](../../knot-platform/ops/entry/README.md)),
-installed by `deploy-site.sh` as the tunnel resident service; write them in `site.env` only when configuring the tunnel by hand. In that case do **not** run `push-entry.sh` — static-file ownership is decided by handoff sheet 6.5.
+[`../../knot-platform/ops/README.md`](../../knot-platform/ops/README.md) section 1 and 4),
+installed by `deploy-site.sh` as the tunnel resident service. The entry conf is the hub's: the instance installs nothing on the entry host.
 With another implementation, follow the table above; there is no need to know what `tunnel.env` is.
 
 The access material and these deployment items are two different things: the access material only contains what the hub issues, no domain, port, or host.
@@ -158,7 +158,7 @@ Placeholders use `〈…〉`. The final version of the sheet goes into that inst
 | Item | Value | Responsibility |
 |----|----|--------|
 | entry host | 〈host〉, SSH port 〈22〉 | staff |
-| entry static root | `/var/www/〈id〉` | staff |
+| entry disk root | `/var/www/〈id〉` | staff |
 | entry nginx conf | `/etc/nginx/conf.d/〈id〉.conf` | staff |
 | tunnel system account | `knot-tunnel-〈id〉` | staff create |
 | dedicated loopback port | `〈1808x〉` | staff allocate |
@@ -194,7 +194,6 @@ Roster `federation.json` (membership facts, not rendered):
 
 | Item | Value | Responsibility |
 |----|----|--------|
-| who pushes the static WebUI to the entry | staff push / partner rsync | chosen on the handoff sheet |
 | dynamic paths through the tunnel | `/api/` | fixed |
 | admin surface | entry `^~ /api/admin` returns 404, not tunneled | fixed |
 | tunnel resident service | auto-reconnect on drop; which service manager is the partner's choice | partner |
@@ -247,7 +246,7 @@ The hub does not provide, and does not host on behalf of:
 ## 9. Common blockers
 
 1. **Two instances sharing a tunnel account fail silently.** sshd's first matching `Match` block wins; two blocks for the same `User` only count the first; and `PermitListen` allows only one port. The second instance connects and cannot claim the port; with `ExitOnForwardFailure=yes` it exits directly, leaving only one `remote port forwarding failed` line in the log. Must be one subdomain, one account, one port.
-2. **Assuming the whole site goes through the tunnel.** Actually static files are read from the entry host's disk, and only `/api` goes through the tunnel. Missing this point means no one is responsible for pushing the WebUI artifact, and the page opens with only the API working. Handoff sheet 6.4 must state who pushes the static.
+2. **Assuming the WebUI has to be pushed to the entry host.** Nothing is pushed: the entry reverse-proxies the whole site back through the tunnel, and its disk only holds the placeholder, ACME, `robots.txt` / `sitemap.xml` and the snapshot. `/assets` sitting in the entry cache is an accelerator, not a copy anyone maintains — a new page means a new deploy on the instance.
 3. **Changing the manifest to `active` too early.** The portal first hangs a down instance. Keep `pending` at listing, change to `active` after `/api` works.
 4. **Not running `nginx -t` before reload, or installing the conf before signing the certificate.** The entry usually hosts multiple `server_name`s; one bad conf takes down a whole cluster.
 5. **Assuming the probe address must be filled by hand, or treating the intranet address as `url`.** The probe address is derived from `url`; the manifest has no such field, and writing one fails validation; `url` must be a publicly reachable `https://…`, the build machine resolves on the public side, and an intranet address only gets `down`.
@@ -355,6 +354,6 @@ The `partner.issuance` mail is used only when the public key is late (its body a
 | [`../federation.json`](../federation.json) | federation roster: membership identity, access mode, tunnel account and port |
 | [`../instances.json`](../instances.json) | instance manifest: issued-zone fields |
 | [`../ops/validate-federation.mjs`](../ops/validate-federation.mjs) | roster validation (cross-checked with the manifest) |
-| [`../../knot-platform/ops/entry/README.md`](../../knot-platform/ops/entry/README.md) | the shared entry and tunnel template (instance side) |
+| [`../../knot-platform/ops/README.md`](../../knot-platform/ops/README.md) section 4 | the instance-side tunnel: key, `tunnel.env`, resident unit |
 | `ops/check-health.mjs` | the health probe implementation (source of section 7) |
 | `ops/watch-health.mjs` | 15-minute patrol: 24h reminder, 7d hide |

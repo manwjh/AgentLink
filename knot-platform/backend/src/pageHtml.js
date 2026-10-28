@@ -1,18 +1,15 @@
 // 实例自己发页面时，把站点自述写进 HTML。
 //
-// 两种投放的差别只在于「谁把 HTML 交出去」：
-//   1. static —— 入口磁盘上有文件，推入口时 ops/scripts/entry-html.mjs 已经写好了；
-//   2. proxy  —— 页面由这个 Backend 发，构建产物里的那份还是通用的 "Knot"。
-//
-// 所以这里不另写一套渲染，直接调用 push 阶段同一个函数：站名、简介、canonical、
-// 社交预览与 JSON-LD 只有一份实现，两档看到的页面不会分叉。
+// 构建产物里的那份 HTML 是通用的 "Knot"：站名、简介、canonical、社交预览与
+// JSON-LD 都要按当前档案和对外地址重写。渲染器在 siteHtml.js，这里只负责
+// 按「文件 mtime + 档案 updatedAt + origin」缓存。
 //
 // 渲染结果按「文件 mtime + 档案 updatedAt + origin」缓存：主理人在 /admin 改自我介绍后
 // 下一次请求就是新的，没改的时候一个请求只多一次 stat。
 
 import fs from "node:fs";
 
-import { renderDiscoverHtml, renderEntryHtml } from "../../ops/scripts/entry-html.mjs";
+import { renderDiscoverHtml, renderEntryHtml } from "./siteHtml.js";
 
 const ABSOLUTE = /^https?:\/\//i;
 

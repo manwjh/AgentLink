@@ -40,7 +40,7 @@ function runGuard(remoteAddress) {
 }
 
 test("the admin page opens to the machine and its intranet, not to the public", () => {
-  for (const address of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "192.168.3.91", "::ffff:192.168.3.91", "fd00::7"]) {
+  for (const address of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "192.168.1.10", "::ffff:192.168.1.10", "fd00::7"]) {
     const result = runGuard(address);
     assert.equal(result.next, true, address);
     assert.equal(result.headers["Content-Security-Policy"], ADMIN_CSP);

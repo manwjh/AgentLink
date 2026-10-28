@@ -2,8 +2,8 @@
 # 实例主机主动连出，把入口的回源端口转到本机 Knot Backend。
 #
 # 账号、私钥和端口来自两处，后者覆盖前者：
-#   sites/<站点>/site.env       手工部署时的入口与隧道项
-#   sites/<站点>/tunnel.env     XKnot 自动接通写入的托管件（由管理界面维护）
+#   sites/<站点>/site.env       站点自己描述的部分（本机端口等）
+#   sites/<站点>/tunnel.env     中枢开通时写入的托管件（由管理界面维护）
 #
 # 托管件里的键：
 #   KNOT_TUNNEL=1
@@ -12,10 +12,8 @@
 #   KNOT_TUNNEL_REMOTE_PORT=<中枢分配的回环端口>
 #   KNOT_TUNNEL_LOCAL_PORT=<本机 Backend 端口>
 #
-# 接管隧道之后不再要求 KNOT_ENTRY_ENABLED：那个键是「本机也负责往入口推 conf」，
-# 而接入 xknot.si 之后入口 conf 由中枢生成，本机只需要连出去。
-#
-# 入口主机上的 sshd 规则见 ops/entry/sshd-tunnel.conf.template。
+# 入口侧的 conf、证书与 sshd 规则都由中枢维护，这个脚本只负责连出去。
+# 入口主机上给这个账号的 sshd 规则见 xknot.si 仓库的 server/provision.mjs。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

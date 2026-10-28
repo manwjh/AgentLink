@@ -6,10 +6,10 @@ import {
   renderEntryHtml,
   renderRobots,
   renderSitemap,
-} from "./entry-html.mjs";
+} from "./siteHtml.js";
 
-// 入口首页是纯静态的：SPA 跑起来之前，机器与分享预览只能读这份 HTML。
-// 这里盯住「读得到」这件事本身，不涉及运行时。
+// 首页与发现页的 head、首帧与 robots 都由这里生成：SPA 跑起来之前，机器与分享
+// 预览只能读这份 HTML。这里盯住「读得到」这件事本身，不涉及运行时。
 
 const SHELL = `<!DOCTYPE html>
 <html lang="en">

@@ -111,8 +111,8 @@ if [[ "$DRY_RUN" == 1 ]]; then
   exit 0
 fi
 
-# 只换 current，不重写 platform.env：那份里的 STATIC_WEB_DIR 和
-# KNOT_DISCOVER_PUSH_CMD 都写成经 current 的路径，换链接就跟着换了版本。
+# 只换 current，不重写 platform.env：那份里的 STATIC_WEB_DIR 写成经 current 的路径，
+# 换链接就跟着换了版本。
 ln -sfn "releases/$TARGET_NAME" "$CURRENT_LINK"
 
 # 用哪种运行时，先看装过什么（LaunchAgent 是明确的证据），最后才按 var/run

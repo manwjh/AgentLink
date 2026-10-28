@@ -1,25 +1,13 @@
-#!/usr/bin/env node
-// 入口静态页的生成：把站点自述写进 index.html 与 discover.html 的 head，
-// 再随手生成 robots.txt 与 sitemap.xml。
+// 站点自述写进 HTML：首页与发现页的 head、首帧文案、robots.txt 与 sitemap.xml。
 //
-// 为什么站点自述不在构建时做：站点名称、介绍和 logo 属于「自述区」，主理人在 /admin 里
-// 随时改，构建产物不知道域名，也不知道这份档案。推到哪台入口主机、用哪个子域，只有
-// push-entry.sh 知道，所以这一刻才生成。发现页在构建时先有一份通用壳
-// （web/scripts/build-discover.mjs），这里再按档案覆盖成站点自己的文案。
+// 站点名称、介绍和 logo 属于「自述区」，主理人在 /admin 里随时改，而构建产物
+// 不知道域名，也不知道这份档案。所以这一层在发页面的时候才做：Backend 读
+// web/dist 的那份模板，按当前档案与对外地址渲染一遍。
 //
-// 这里不渲染信息流，也不起 Node 服务：入口仍然只放静态文件，只是把「首页 HTML 里
-// 一个字都没有」变成「首页 HTML 里有站点名、一句话介绍和详细介绍」。
+// 这里不渲染信息流，也不产出静态站点：只把「首页 HTML 里一个字都没有」
+// 变成「首页 HTML 里有站点名、一句话介绍和详细介绍」。
 //
-// 用法：
-//   node ops/scripts/entry-html.mjs \
-//     --in web/dist/index.html --out /tmp/knot-entry \
-//     --origin https://wang.xknot.si --profile sites/wang/profile.json
-//
-// --profile 缺省读 KNOT_PROFILE_FILE；--name 是档案缺失时的兜底站点名。
-
-import fs from "node:fs";
-import path from "node:path";
-import { invokedDirectly } from "./lib/main-module.mjs";
+// 浏览器拿到的仍然是同一份 SPA 外壳，所以本模块只替换 head、首帧与 noscript。
 
 import { inferLocale, isLocale } from "@knot/locale";
 
@@ -177,7 +165,7 @@ export function renderEntryHtml(template, { site, origin, fallbackName = "Knot" 
       /\n[ \t]*<\/head>/i,
       `\n${head}\n    <script type="application/ld+json">${structured}</script>\n  </head>`,
     )
-    // 首帧内容：构建产物里写的是通用文案，入口主机按站点档案换成本站的名字与一句话介绍。
+    // 首帧内容：构建产物里写的是通用文案，这里按站点档案换成本站的名字与一句话介绍。
     // 正则只认带 data-knot-* 的那个节点，不碰页面里的同名元素以外的结构。
     .replace(/(<[^>]*data-knot-name[^>]*>)[\s\S]*?(<\/[a-z]+>)/i, `$1${escapeHtml(info.name)}$2`)
     .replace(
@@ -197,7 +185,7 @@ export function renderEntryHtml(template, { site, origin, fallbackName = "Knot" 
  * HTML 里的 canonical 却指着首页，爬虫于是把两页当成同一页，sitemap 里那条 /discover
  * 也等于白写。这里给它一份独立的 HTML，canonical 指向自己。
  *
- * 构建时没有站点档案和 origin，也照样生成一份：proxy 投放的实例直接发 web/dist，
+ * 构建时没有站点档案和 origin，也照样生成一份：Backend 直接发 web/dist 里的这一份，
  * 相对 canonical（`/discover`）在哪个域名下都能解析，不会指回首页。
  */
 export function renderDiscoverHtml(template, { site, origin = "", fallbackName = "Knot" } = {}) {
@@ -309,65 +297,4 @@ export function renderSitemap(origin) {
     "</urlset>",
     "",
   ].join("\n");
-}
-
-function readProfileFile(file) {
-  if (!file) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    // v2 档案是 { formatVersion, site, updatedAt }；也接受直接把 site 摊平的那份。
-    return parsed?.site && typeof parsed.site === "object" ? parsed.site : parsed;
-  } catch {
-    return null;
-  }
-}
-
-function argValue(name, fallback = "") {
-  const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
-}
-
-function main() {
-  const input = argValue("in");
-  const outDir = argValue("out");
-  const origin = argValue("origin");
-  const profileFile = argValue("profile", process.env.KNOT_PROFILE_FILE || "");
-  const name = argValue("name", "Knot");
-
-  if (!input || !outDir || !origin) {
-    console.error("用法：entry-html.mjs --in <web/dist/index.html> --out <目录> --origin <站点地址> [--profile <profile.json>] [--name <兜底名称>]");
-    process.exit(2);
-  }
-  if (!/^https?:\/\//i.test(origin)) {
-    console.error(`origin 必须是绝对地址，当前是：${origin}`);
-    process.exit(2);
-  }
-
-  const site = readProfileFile(profileFile);
-  if (!site) {
-    console.error(
-      profileFile
-        ? `警告：读不到站点档案 ${profileFile}，首页只用兜底名称 ${name}。`
-        : `警告：没有指定站点档案（--profile），首页只用兜底名称 ${name}。`,
-    );
-  }
-
-  fs.mkdirSync(outDir, { recursive: true });
-  const template = fs.readFileSync(input, "utf8");
-  fs.writeFileSync(
-    path.join(outDir, "index.html"),
-    renderEntryHtml(template, { site, origin, fallbackName: name }),
-  );
-  fs.writeFileSync(
-    path.join(outDir, "discover.html"),
-    renderDiscoverHtml(template, { site, origin, fallbackName: name }),
-  );
-  fs.writeFileSync(path.join(outDir, "robots.txt"), renderRobots(origin));
-  fs.writeFileSync(path.join(outDir, "sitemap.xml"), renderSitemap(origin));
-  console.log(`==> 入口首页与发现页：${site?.name || name}（${origin}），robots.txt 与 sitemap.xml 已生成`);
-}
-
-// 入口文件由 push-entry 调用，可能经由软链；判断要比真实路径。
-if (invokedDirectly(import.meta.url)) {
-  main();
 }

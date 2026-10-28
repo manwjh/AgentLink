@@ -11,12 +11,12 @@ The federation has three server-side roles and two independent codebases.
 | Role | What runs there | Owns | Code |
 |------|-----------------|------|------|
 | **Hub** | Portal, API process, provisioning worker, timers, build pipeline | `instances.json`, `federation.json`, `var/`, `dist/` | `xknot.si/` |
-| **Entry host** | nginx and sshd, one server block and one tunnel account per subdomain | TLS, static placeholder, cache, access log, loopback tunnel ports | templates in `knot-platform/ops/entry/`; manually kept confs in `xknot.si/ops/entry/` |
+| **Entry host** | nginx and sshd, one server block and one tunnel account per subdomain | TLS, static placeholder, cache, access log, loopback tunnel ports | rendered by `server/provision.mjs`; manual records in `xknot.si/ops/entry/` |
 | **Instance host** | A Knot: WebUI, Backend, PostgreSQL, uploads | Accounts, content, points, review, orders, its own backups | `knot-platform/` |
 
 Clients are not a fourth role: a browser reaches an instance through the entry, and a Personal Agent reaches the same Backend through the Agent API.
 
-**A role is a responsibility, not a machine.** The current deployment runs the hub and the entry on the same host; ownership still splits by role. The hub's own nginx config belongs to `xknot.si/ops/`. The entry's reusable templates belong to `knot-platform/ops/entry/`, while the conf for a hub-issued subdomain is the hub's issuance record. Sharing a machine never merges the two.
+**A role is a responsibility, not a machine.** The current deployment runs the hub and the entry on the same host; ownership still splits by role. The hub's own nginx config belongs to `xknot.si/ops/`. An issued subdomain's conf is rendered by the provisioning worker and is the hub's issuance record; the instance side never writes it. Sharing a machine never merges the two.
 
 Three planes cross these roles, and keeping them apart explains most of the design:
 
@@ -69,16 +69,14 @@ The entry is the only public surface for an issued subdomain.
 | Cache | Long cache for hashed `/assets/`, short cache for the page shell, one-day cache for uploads; auto-provisioned entries use a per-subdomain zone |
 | Access log | One `access_log` directive per subdomain into the shared file; the query string is never logged; auto-provisioned entries declare their own `log_format` |
 | sshd | One tunnel account and one permitted loopback port per subdomain |
-| Disk | ACME challenge directory, placeholder page, optional WebUI copy, `discover.json` snapshot |
+| Disk | ACME challenge directory, placeholder page, `robots.txt` / `sitemap.xml`, `discover.json` snapshot |
 
-Two serve modes share one template:
+One generator produces both stages of an issued subdomain:
 
-- **proxy**: the default for issued subdomains. The whole site returns through the tunnel; the entry disk keeps the placeholder and the ACME directory (plus optional public discovery files).
-- **static**: the WebUI and public snapshot live on the entry disk; only `/api/` crosses the tunnel. A partner who runs `push-entry.sh` owns this mode.
+- **before acceptance**: `/` serves the placeholder from the entry disk, `/api/` is already connected to the loopback port. The disk also holds the ACME challenge directory, `robots.txt`, `sitemap.xml`, and the public `discover.json` the hub fetches over the tunnel.
+- **after acceptance**: the same generator rewrites `/` to reverse-proxy through the tunnel; the placeholder retires and the static root is left to ACME.
 
-Before the tunnel is up, `/` serves the placeholder and `/api/` is already connected to the loopback port, so once the tunnel comes up acceptance needs nothing more. After acceptance, the same generator rewrites `/` to the instance and the placeholder retires.
-
-A conf is either hub-managed or hand-maintained. The hub's automatic provisioning writes the first kind, with a managed mark on the first line; a partner's `push-entry.sh` or an ops-only manual conf writes the second, and the hub only rewrites confs it created.
+A conf is either hub-managed or hand-maintained. Automatic provisioning writes the first kind, with a managed mark on the first line; an ops-only manual conf writes the second, and the hub only rewrites confs it created. `node server/admin-cli.mjs entry-adopt <id>` takes over a hand-maintained conf: the original is kept as `<subdomain>.conf.adopted` and the worker checks the hub version from then on.
 
 Entry traffic is a hub-side observation, not a federation layer: the hub aggregates this log per subdomain, shows it only in the console, and puts it into neither the snapshot nor the member entry.
 
@@ -206,4 +204,4 @@ This architecture deliberately has no content feed, no cross-instance messaging,
 | Access and tunnel steps | [JOIN.md](JOIN.md), [HANDOFF.md](HANDOFF.md) |
 | Local stack and tests | [E2E.md](E2E.md) |
 | Instance internals | [knot-platform/README.md](../../knot-platform/README.md), [knot-platform/docs/PROFILE.md](../../knot-platform/docs/PROFILE.md) |
-| Entry templates | [knot-platform/ops/entry/README.md](../../knot-platform/ops/entry/README.md) |
+| Entry rendering and records | [ops/entry/README.md](../ops/entry/README.md), `server/provision.mjs` |

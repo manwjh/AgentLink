@@ -6,9 +6,9 @@
 //   sites/<站点>/profile.json      自述区：名称、介绍、logo、主理人（主理人在 /admin 编辑）
 //   sites/<站点>/platform.env      实例主机运行时值（部署脚本生成）
 //   sites/<站点>/xknot.env         XKnot 接入（中枢签发，可选）
-//   sites/<站点>/entry.<标签>.xknot.si.env  xknot.si 子域入口（可选，一个站点一份）
+//   sites/<站点>/tunnel.env        回源隧道参数（中枢开通时写入，可选）
 //
-// 部署脚本只读 site.env、platform.env 和入口文件；接入文件只在运行时交给 Backend，profile.json 由 Backend 启动时读。
+// 部署脚本只读 site.env 与 platform.env；接入文件只在运行时交给 Backend，profile.json 由 Backend 启动时读。
 //
 // 这里只做文件系统上的事，不解释每个键的含义；键在 packages/knot-config 里登记。
 
@@ -101,29 +101,3 @@ export function resolveSitePaths(root, { site, file } = {}) {
 export function readSiteEnv(paths) {
   return { ...parseEnv(readFileSync(paths.siteEnv, "utf8")) };
 }
-
-// 一个站点最多一个 xknot.si 子域入口：sites/<站点>/entry.<标签>.xknot.si.env。
-// 返回 { file, name, host }；没有入口文件时返回 null。多于一份让调用方报错。
-export function listEntryFiles(dir) {
-  let names;
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return [];
-  }
-  return names
-    .filter((name) => name.startsWith("entry.") && name.endsWith(".env") && name.length > "entry..env".length)
-    .sort()
-    .map((name) => ({
-      file: path.join(dir, name),
-      name,
-      host: name.slice("entry.".length, -".env".length),
-    }));
-}
-
-// 把入口叠加到站点视图上。传入的 paths 是站点配置，这里再压一层入口。
-export function readEntryFile(paths, entry) {
-  const env = readSiteEnv(paths);
-  return { ...env, ...parseEnv(readFileSync(entry.file, "utf8")) };
-}
-

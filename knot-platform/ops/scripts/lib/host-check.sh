@@ -80,7 +80,7 @@ knot_brew_bin() {
 
 # ---- 平台 ----
 # 实例主机跑 Backend + PostgreSQL + 上传目录，main 只支持 macOS。
-# 入口主机（Linux + nginx）不在这条判定里：它是 push-entry.sh 的远端，不跑 Knot。
+# 入口主机（Linux + nginx）不在这条判定里：它由中枢维护，不跑 Knot。
 knot_check_host_platform() {
   local system
   system="$(uname -s)"

@@ -33,7 +33,6 @@ test("only the site template is tracked", (t) => {
   if (!inRepo()) return t.skip("不在 git 工作区里");
   const tracked = siteFiles().sort();
   assert.deepEqual(tracked, [
-    "sites/_template/entry.example.env",
     "sites/_template/platform.env",
     "sites/_template/site.env",
     "sites/_template/xknot.env",
@@ -56,6 +55,7 @@ test("a real site directory and its secrets are ignored", (t) => {
     "sites/bot01/tester.env",
     "sites/bot01/platform.env",
     "sites/bot01/xknot.env",
+    "sites/bot01/tunnel.env",
     "sites/bot01/agents/token.env",
     "sites/any-other-site/site.env",
   ]) {

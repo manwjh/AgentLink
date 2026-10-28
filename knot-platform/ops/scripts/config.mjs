@@ -11,7 +11,7 @@
 //   node ops/scripts/config.mjs docs [--write]
 //   node ops/scripts/config.mjs env --site <站点> [--out path] [--root path] [--deploy-root path]
 //   node ops/scripts/config.mjs join --site <站点> [--in <接入件>] [--out path]
-//   node ops/scripts/config.mjs show --for dev|platform|entry --site <站点>
+//   node ops/scripts/config.mjs show --for dev|platform --site <站点>
 //
 // 站点用 --site 选择，也可以用环境变量 KNOT_SITE。只有 sites/ 下恰好一个站点时才自动选中。
 // check 发现类型错误、缺必填、跨键矛盾时以退出码 1 结束。部署脚本据此在动任何东西之前停下。
@@ -24,7 +24,6 @@ import {
   KEYS,
   FORBIDDEN_PLATFORM_KEYS,
   RETIRED_PLATFORM_KEYS,
-  checkEntryFile,
   checkJoin,
   checkPlatform,
   checkSite,
@@ -44,9 +43,7 @@ import {
 } from "../../packages/knot-config/src/schema.mjs";
 import {
   deployRootOf,
-  listEntryFiles,
   listSites,
-  readEntryFile,
   readSiteEnv,
   resolveSitePaths,
   validSiteName,
@@ -139,66 +136,7 @@ function cmdCheck(argv) {
   }
 
   const site = checkSite(readSiteEnv(paths));
-  const entries = checkEntries(paths);
-  const title = entries.count
-    ? `站点配置 ${label}（1 个 xknot.si 子域入口）`
-    : `站点配置 ${label}`;
-  return report(title, {
-    errors: [...site.errors, ...entries.errors],
-    warnings: [...site.warnings, ...entries.warnings],
-  });
-}
-
-// 一个站点最多一个 xknot.si 子域入口。
-//
-// 除了单份文件的合法性，还查入口与站点配置是否对得上：
-//   1. 入口域名必须是 xknot.si 签发的二级子域；
-//   2. KNOT_ENTRY_ENABLED=1 时必须有入口文件，且对外地址就是这个子域；
-//   3. KNOT_ENTRY_ENABLED=0（local）时不带入口文件。
-function checkEntries(paths) {
-  const entries = listEntryFiles(paths.dir);
-  const base = readSiteEnv(paths);
-  const errors = [];
-  const warnings = [];
-
-  if (entries.length > 1) {
-    errors.push(
-      `sites/${paths.name}/ 下有 ${entries.length} 个入口文件。官方只支持一个 xknot.si 子域入口，请删掉多余的 entry.<标签>.xknot.si.env。`
-    );
-  }
-  const entry = entries[0] || null;
-
-  if (entry) {
-    const env = readEntryFile(paths, entry);
-    const result = checkEntryFile(env, { file: entry.file });
-    for (const message of result.errors) errors.push(`${entry.name}: ${message}`);
-    for (const message of result.warnings) warnings.push(`${entry.name}: ${message}`);
-  }
-
-  const enabled = truthy(base.KNOT_ENTRY_ENABLED);
-  if (enabled) {
-    if (!entry) {
-      errors.push(
-        `KNOT_ENTRY_ENABLED=1 但 sites/${paths.name}/ 下没有 entry.<标签>.xknot.si.env。接入 xknot.si 子域要有且只有一份入口文件。`
-      );
-    } else {
-      let originHost = "";
-      try {
-        originHost = new URL(String(base.KNOT_PUBLIC_ORIGIN || "")).hostname;
-      } catch {
-        originHost = "";
-      }
-      if (originHost && entry.host && originHost !== entry.host) {
-        errors.push(`KNOT_PUBLIC_ORIGIN 的主机名 ${originHost} 与入口文件 ${entry.name} 不一致。`);
-      }
-    }
-  } else if (entry) {
-    errors.push(
-      `KNOT_ENTRY_ENABLED=0 是 local 部署，但 sites/${paths.name}/ 下还有 ${entry.name}；local 不带入口文件，要接子域请设 KNOT_ENTRY_ENABLED=1。`
-    );
-  }
-
-  return { errors, warnings, count: entry ? 1 : 0 };
+  return report(`站点配置 ${label}`, site);
 }
 
 function writeOut(file, text, mode = 0o644) {
@@ -336,9 +274,7 @@ function cmdSites() {
       const env = parseEnv(readFileSync(joinFile, "utf8"));
       join = env.XKNOT_INSTANCE_ID ? `已接入 ${env.XKNOT_INSTANCE_ID}` : "xknot.env 缺实例 id";
     }
-    const entries = listEntryFiles(dir).map((entry) => entry.host);
-    const entryNote = entries.length ? `，入口 ${entries.join("、")}` : "，无公网入口";
-    console.log(`${name.padEnd(16)} ${platform}${entryNote}，${join}`);
+    console.log(`${name.padEnd(16)} ${platform}，${join}`);
   }
   return 0;
 }
@@ -391,8 +327,6 @@ function computedValue(key, env, ctx) {
       return path.join(ctx.deployRoot || ctx.root, "sites", ctx.site, "agents");
     case "KNOT_PROFILE_FILE":
       return path.join(ctx.deployRoot || ctx.root, "sites", ctx.site, "profile.json");
-    case "KNOT_DISCOVER_PUSH_CMD":
-      return truthy(env.KNOT_ENTRY_ENABLED) ? path.join(ctx.root, "ops/scripts/push-discover.sh") : "";
     default:
       return "";
   }

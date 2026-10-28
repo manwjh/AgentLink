@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- 首帧语种与 bootLocale 的默认值一致（zh-CN），静态描述也用同一语种：
-     入口主机会用 ops/scripts/entry-html.mjs 按站点 profile 重写 lang、description 和 #app 里的首帧。
+     Backend 会用 backend/src/siteHtml.js 按站点 profile 重写 lang、description 和 #app 里的首帧。
      这里只是裸构建产物自己也能自洽：脚本没到、脚本报错或网络太慢时，#app 里这段静态内容就是页面。 -->
 <html lang="zh-CN">
   <head>

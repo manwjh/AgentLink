@@ -32,7 +32,6 @@ knot-platform/sites/_template/*
 !knot-platform/sites/_template/site.env
 !knot-platform/sites/_template/platform.env
 !knot-platform/sites/_template/xknot.env
-!knot-platform/sites/_template/entry.example.env
 *.local.env
 
 # 发布包只留本机

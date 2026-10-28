@@ -145,7 +145,7 @@ For manual re-runs (worker stopped, or redoing one application from scratch): `n
 
 Applies when the instance sits on a machine that usually has no fixed public IP (home broadband, behind NAT, can only initiate outbound), with the hub issuing the subdomain and connecting it to the entry.
 
-It needs a public entry host holding the certificate and static files, and the instance initiating an outbound reverse tunnel. **This is the instance side's deployment shape, not part of the hub**; concrete config and commands are in the instance repo's [ops/entry/README.md](../../knot-platform/ops/entry/README.md).
+It needs a public entry host holding the certificate and the nginx conf, and the instance initiating an outbound reverse tunnel. **The hub builds the entry side; the instance only dials out.** The instance's half — tunnel key, `tunnel.env`, resident unit — is in [knot-platform/ops/README.md](../../knot-platform/ops/README.md) section 4.
 
 ```text
 browser ──HTTPS──▶ public entry (nginx + certificate)
@@ -161,7 +161,7 @@ browser ──HTTPS──▶ public entry (nginx + certificate)
 
 **After connection the whole site goes through the tunnel; the entry disk keeps only the placeholder page and the ACME challenge.** In the conf generated during pre-staging, `/` serves a placeholder page ("subdomain issued, entry connecting") and `/api/` is already connected to the loopback port for the health probe; once the probe passes, the worker uses the same generator to change `/` to a reverse proxy too, and the placeholder page retires. So the partner does not need to push the WebUI artifact to the entry host, and after launch there is no "API works, page is stale" state.
 
-The entry template also has a `KNOT_ENTRY_SERVE=static` deployment shape (pages come from the entry disk, only `/api/` goes through the tunnel) — that is for self-built entries, not the default path of issued subdomains; see [ops/entry/README.md](../../knot-platform/ops/entry/README.md).
+An issued subdomain always ends up whole-site reverse-proxied: pages come through the tunnel, and only the placeholder, ACME directory, `robots.txt`, `sitemap.xml` and the public `discover.json` snapshot live on the entry disk. Self-built entries that serve pages from disk are outside the federation.
 
 The hub cares about only three things here:
 
@@ -173,7 +173,7 @@ The hub cares about only three things here:
 | Keys | only on the running machine's `~/.ssh/`, **not in the repo, not in this document** |
 | Roster | `mode: "subdomain"`, `tunnel: { account, port }` required, not allowed to be null |
 
-The DNS, certificate, static root, `server` block, tunnel account, and port in this section are **all finished by the hub alone before exchange point A** — no partner presence or prior work needed. The only thing the partner must hand over at application time is the public key. Order and the ten-item checklist are in [HANDOFF.md](HANDOFF.md) section 3. Template and steps in [ops/entry/README.md](../../knot-platform/ops/entry/README.md); wildcard multi-tenant auto-server is not done (section 6).
+The DNS, certificate, static root, `server` block, tunnel account, and port in this section are **all finished by the hub alone before exchange point A** — no partner presence or prior work needed. The only thing the partner must hand over at application time is the public key. Order and the ten-item checklist are in [HANDOFF.md](HANDOFF.md) section 3. The renderer is `server/provision.mjs`; wildcard multi-tenant auto-server is not done (section 6).
 
 `ops/README-deploy-aws.md` notes: the tunnel user `knot-tunnel@` must be separately provisioned on the entry host before the tunnel is used; the entry host is given by the deployment config, with no default value in the repo.
 
@@ -261,12 +261,12 @@ Implementation: `ops/watch-health.mjs` (mail and scheduling), `ops/check-health.
 
 The two sides' code and scripts are stored separately: the hub's deployment files are in the `ops/` at this document's level; the instance's deployment files are in [`knot-platform/ops/`](../../knot-platform/ops). The hub does not reference the instance's files, and the instance does not reference the hub's; the two meet only through the HTTP contract and the access material, and this document only explains policy and links. Swapping the instance implementation (Go, Rust, another language) does not affect the hub's code, manifest, or probes.
 
-**The hub host and the entry host can be the same machine — the current deployment is exactly that.** Role ownership does not merge just because they share a machine: the hub's config belongs to `xknot.si/ops/`, the entry's config belongs to the instance side `knot-platform/ops/entry/`. The easiest mistake on a shared machine is editing the hub site with the entry's nginx config, or the reverse. The full concept map and ownership are in [`docs/concepts.md`](../../docs/concepts.md).
+**The hub host and the entry host can be the same machine — the current deployment is exactly that.** Role ownership does not merge just because they share a machine: the hub's config belongs to `xknot.si/ops/`, and every issued subdomain's entry conf is rendered by the provisioning worker and belongs to the hub's issuance record. The easiest mistake on a shared machine is editing the hub site with an entry conf, or the reverse. The full concept map and ownership are in [`docs/concepts.md`](../../docs/concepts.md).
 
-**"Entry" is split into two places by scope**: reusable templates in [`knot-platform/ops/entry/`](../../knot-platform/ops/entry/) (usable by any instance); the concrete conf and connection runbook for hub-issued subdomains in [`xknot.si/ops/entry/`](../ops/entry/) (hardcoded domains, changed only by hub staff).
+**"Entry" is split by scope**: the generator in `server/provision.mjs` and `ops/provision-worker.mjs` renders every conf; records that hardcode one subdomain (a deviating conf, a connection runbook) live in [`xknot.si/ops/entry/`](../ops/entry/) and are changed only by hub staff.
 
 - hub nginx: `ops/xknot.si.conf`; hub deployment notes: `ops/README-deploy-aws.md`
-- public entry template (instance side): `../../knot-platform/ops/entry/README.md`
+- instance-side tunnel: `../../knot-platform/ops/README.md` section 4
 - entry for issued subdomains (hub side): `../ops/entry/`, holding only confs and runbooks needing manual maintenance; `cpswang` is written by automatic provisioning and is not in the repo
 
 Billing and subdomain services do not happen in the hub's order flow (see the README "Listing and billing").
@@ -286,7 +286,7 @@ Billing and subdomain services do not happen in the hub's order flow (see the RE
 | auto-issue DNS after approval | **not implemented**: the worker only *checks* DNS (step `dns`). The wildcard `*.xknot.si → entry IP` is preconfigured once by ops, not issued per application |
 | traditional DDNS (client changes A to current egress IP) | **not done**; NAT scenarios use entry + SSH reverse tunnel |
 | issued subdomain + DNS to the partner's own fixed IP (no tunnel) | **unsupported**: access has only the "entry host + reverse tunnel" shape; this combination fits neither side, and `validate-federation.mjs` rejects it. For a fixed IP, use an own domain and self-build the site, outside the federation |
-| single-subdomain entry config | **exists** (instance side): the entry and nginx are rendered by the instance implementation itself. Current implementation is `knot-platform`: entry file [`sites/_template/entry.example.env`](../../knot-platform/sites/_template/entry.example.env), template [`knot-platform/ops/entry/site.conf.template`](../../knot-platform/ops/entry/site.conf.template), steps in [`knot-platform/ops/entry/README.md`](../../knot-platform/ops/entry/README.md). The hub only requires "one account and one port per subdomain, `/api` reachable to the instance" |
+| single-subdomain entry config | **exists** (hub side): `server/provision.mjs` renders it and the worker installs it. The hub requires "one account and one port per subdomain, `/api` reachable to the instance"; the instance only runs the tunnel |
 | wildcard multi-tenant `*.xknot.si` entry nginx | **not done**: the worker generates one conf per subdomain automatically (steps `vhost` / `tls`), still no single per-Host tenancy |
 | hub site HTTPS / NS switch details | see `ops/README-deploy-aws.md`; certificate and some DNS steps are marked separate tasks |
 
@@ -315,12 +315,11 @@ Bounces and complaints are the instance's own to watch. Abuse can get the shared
 
 ## 8. Related files
 
-The hub's own file map — what each script and directory does — is the single copy in [HUB.md](HUB.md#2-directory); it is not repeated here. For the partner side, the three entry files are:
+The hub's own file map — what each script and directory does — is the single copy in [HUB.md](HUB.md#2-directory); it is not repeated here. For the partner side, the two entry files are:
 
 | Path | Use |
 |------|------|
-| [`knot-platform/ops/entry/README.md`](../../knot-platform/ops/entry/README.md) | entry + tunnel realization |
-| [`knot-platform/sites/_template/entry.example.env`](../../knot-platform/sites/_template/entry.example.env) | per-entry site config template (domain, static root, conf, serve mode) |
-| [`knot-platform/ops/entry/sshd-tunnel.conf.template`](../../knot-platform/ops/entry/sshd-tunnel.conf.template) | sshd config for the entry tunnel account |
+| [`knot-platform/ops/README.md`](../../knot-platform/ops/README.md) section 4 | instance-side tunnel realization |
+| `server/provision.mjs` (`renderSshdMatch`) | sshd config for the entry tunnel accounts |
 
 Keys, passwords, and PEM paths live only in each machine's private environment and `~/.ssh/`; this document and the repo do not include them.

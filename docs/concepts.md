@@ -12,26 +12,26 @@
 | **中枢主机** | 跑中枢的那台机器，主机名固定 `xknot.si` | `xknot.si/ops/` |
 | **实例** | 一套独立部署的 Knot：自己的库、账号、积分、审核、上传 | 伙伴自己 |
 | **实例主机** | 跑实例 Backend、Postgres 与上传目录的那台机器 | `knot-platform/sites/<站点>/` |
-| **公网入口** | 给实例域名用的 nginx：证书、对外 HTTPS、静态 WebUI、`/api` 反向代理 | 实例侧，`knot-platform/ops/entry/` |
+| **公网入口** | 给实例域名用的 nginx：证书、对外 HTTPS、占位页与公开快照、整站反向代理 | 中枢，`xknot.si/server/provision.mjs` 渲染 |
 | **入口主机** | 跑公网入口的那台机器 | 同上 |
-| **回源隧道** | 实例主动连出的 SSH 反向隧道，把入口主机的回环端口接到实例 | `sites/<站点>/site.env` 的 `KNOT_TUNNEL_*` |
+| **回源隧道** | 实例主动连出的 SSH 反向隧道，把入口主机的回环端口接到实例 | `sites/<站点>/tunnel.env` 的 `KNOT_TUNNEL_*` |
 
 **入口按范围分两处存放**，这不是两个概念，是同一件事的两种粒度：
 
 | 位置 | 放什么 | 换个实例还能用吗 |
 |------|--------|------------------|
-| `knot-platform/ops/entry/` | nginx conf 模板、缓存片段、sshd 隧道模板、渲染与推送脚本 | 能 → 是软件 |
-| `xknot.si/ops/entry/` | 某个已签发子域的具体 conf 与接通 runbook（如 `<子域>.xknot.si.conf`） | 不能 → 是这次签发的记录 |
+| `xknot.si/server/provision.mjs`、`ops/provision-worker.mjs` | 占位页、静态根、nginx conf、证书、隧道账号与 sshd 段的渲染，以及安装与核对 | 能 → 是软件 |
+| `xknot.si/ops/entry/` | 某个已签发子域需要人工维护的 conf 与接通 runbook（如 `<子域>.xknot.si.conf`） | 不能 → 是这次签发的记录 |
 
 ## 一台机器可以兼任
 
-角色是职责，机器是硬件。**同一台机器可以同时是中枢主机和入口主机**，当前部署就是这样：`xknot.si`、`wang.xknot.si` 落在同一台主机上。
+角色是职责，机器是硬件。**同一台机器可以同时是中枢主机和入口主机**，当前部署就是这样：中枢站点与各实例的入口落在同一台主机上。
 
 但归属按角色分，不按机器分：
 
 - 中枢的配置只放 `xknot.si/ops/`；
-- 入口的配置：可复用的模板放 `knot-platform/ops/entry/`，在入口主机上装的站点写 `sites/<站点>/entry.<域名>.env`；中枢替伙伴装的那一份（写死子域）放 `xknot.si/ops/entry/`；
-- 实例自己的配置只放 `sites/<站点>/site.env` 与 `platform.env`。
+- 入口的配置：已签发子域的 conf 由开通进程渲染并安装，人工维护的例外放 `xknot.si/ops/entry/`；实例这一侧不写入口主机上的任何文件；
+- 实例自己的配置只放 `sites/<站点>/site.env`、`platform.env` 与开通流程写下的 `tunnel.env`。
 
 两个项目互不引用对方的文件，只通过 HTTP 契约与接入件相连。所以「这台机器上还跑着中枢」不是实例部署的依赖，反过来也不是。
 
@@ -59,4 +59,4 @@
 | 术语、禁用词、标准句子 | [xknot.si/docs/NAMING.md](../xknot.si/docs/NAMING.md) |
 | 中枢与实例的契约 | [xknot.si/docs/FEDERATION.md](../xknot.si/docs/FEDERATION.md) |
 | 中枢怎么跑、怎么验收 | [xknot.si/docs/HUB.md](../xknot.si/docs/HUB.md) |
-| 实例怎么部署、入口怎么配 | [knot-platform/README.md](../knot-platform/README.md)、[`knot-platform/ops/README.md`](../knot-platform/ops/README.md)、[`knot-platform/ops/entry/README.md`](../knot-platform/ops/entry/README.md) |
+| 实例怎么部署、隧道怎么配 | [knot-platform/README.md](../knot-platform/README.md)、[`knot-platform/ops/README.md`](../knot-platform/ops/README.md) 第 4 节 |

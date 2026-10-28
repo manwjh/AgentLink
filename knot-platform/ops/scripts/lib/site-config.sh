@@ -7,7 +7,7 @@
 #   sites/<站点>/profile.json        自述区：名称、介绍、logo、主理人（主理人在 /admin 编辑）
 #   sites/<站点>/platform.env        实例主机运行时值（部署脚本生成）
 #   sites/<站点>/xknot.env           XKnot 接入（中枢签发，可选）
-#   sites/<站点>/entry.<标签>.xknot.si.env    xknot.si 子域入口（可选，一个站点一份）
+#   sites/<站点>/tunnel.env          回源隧道参数（中枢开通时写入，可选）
 #
 # 目录布局（部署根 KNOT_DEPLOY_ROOT）：
 #
@@ -212,47 +212,12 @@ KNOT_DEPLOY_VERIFY_URL="${KNOT_DEPLOY_VERIFY_URL:-}"
 KNOT_DEPLOY_KEEP="${KNOT_DEPLOY_KEEP:-5}"
 KNOT_ARTIFACT_DIR="${KNOT_ARTIFACT_DIR:-$KNOT_APP_DIR/artifacts}"
 
-# ---- 公网入口 ----
-KNOT_ENTRY_ENABLED="${KNOT_ENTRY_ENABLED:-0}"
-KNOT_ENTRY_SSH="${KNOT_ENTRY_SSH:-}"
-# 从开发机推页面用的私钥
-KNOT_ENTRY_SSH_KEY="${KNOT_ENTRY_SSH_KEY:-$HOME/.ssh/id_rsa}"
-# 实例主机上推公开快照用的私钥（和开发机不是同一把）
-KNOT_ENTRY_PUSH_KEY="${KNOT_ENTRY_PUSH_KEY:-$HOME/.ssh/knot-entry-publish}"
-KNOT_ENTRY_WEB_OWNER="${KNOT_ENTRY_WEB_OWNER:-nginx:nginx}"
-KNOT_ENTRY_CACHE_DIR="${KNOT_ENTRY_CACHE_DIR:-/var/cache/nginx/knot_uploads}"
-KNOT_ENTRY_CACHE_ZONE="${KNOT_ENTRY_CACHE_ZONE:-knot_uploads}"
-KNOT_ENTRY_CACHE_SIZE="${KNOT_ENTRY_CACHE_SIZE:-2g}"
-KNOT_ENTRY_MAX_BODY="${KNOT_ENTRY_MAX_BODY:-52m}"
-KNOT_ENTRY_PROXY_PORT="${KNOT_ENTRY_PROXY_PORT:-18080}"
-KNOT_ENTRY_RELOAD_CMD="${KNOT_ENTRY_RELOAD_CMD:-sudo systemctl reload nginx}"
-KNOT_ENTRY_HOST="${KNOT_ENTRY_SSH#*@}"
-
-# 入口项的默认值与推导。
-#
-# 单独成函数，是因为入口文件会覆盖 KNOT_DOMAIN，证书要跟着这个入口的域名重新推导。
-knot_entry_defaults() {
-  KNOT_ENTRY_WEB_ROOT="${KNOT_ENTRY_WEB_ROOT:-/var/www/knot}"
-  KNOT_ENTRY_CONF="${KNOT_ENTRY_CONF:-/etc/nginx/conf.d/knot.conf}"
-  KNOT_ENTRY_SSL="${KNOT_ENTRY_SSL:-1}"
-  # 访问日志一份文件、按 $host 分：同一台入口主机上的子域共用一个聚合入口。
-  KNOT_ENTRY_ACCESS_LOG="${KNOT_ENTRY_ACCESS_LOG:-/var/log/nginx/knot-access.log}"
-  if [[ -n "${KNOT_DOMAIN:-}" ]]; then
-    KNOT_ENTRY_CERT="${KNOT_ENTRY_CERT:-/etc/letsencrypt/live/$KNOT_DOMAIN/fullchain.pem}"
-    KNOT_ENTRY_KEY="${KNOT_ENTRY_KEY:-/etc/letsencrypt/live/$KNOT_DOMAIN/privkey.pem}"
-  else
-    KNOT_ENTRY_CERT="${KNOT_ENTRY_CERT:-}"
-    KNOT_ENTRY_KEY="${KNOT_ENTRY_KEY:-}"
-  fi
-}
-knot_entry_defaults
-
 # ---- 隧道 ----
 KNOT_TUNNEL="${KNOT_TUNNEL:-0}"
-KNOT_TUNNEL_SSH="${KNOT_TUNNEL_SSH:-knot-tunnel@$KNOT_ENTRY_HOST}"
-KNOT_TUNNEL_KEY="${KNOT_TUNNEL_KEY:-$HOME/.ssh/knot-entry}"
+KNOT_TUNNEL_SSH="${KNOT_TUNNEL_SSH:-}"
+KNOT_TUNNEL_KEY="${KNOT_TUNNEL_KEY:-tunnel_ed25519}"
 KNOT_TUNNEL_LOCAL_PORT="${KNOT_TUNNEL_LOCAL_PORT:-$KNOT_PORT}"
-KNOT_TUNNEL_REMOTE_PORT="${KNOT_TUNNEL_REMOTE_PORT:-$KNOT_ENTRY_PROXY_PORT}"
+KNOT_TUNNEL_REMOTE_PORT="${KNOT_TUNNEL_REMOTE_PORT:-}"
 KNOT_TUNNEL_USER="${KNOT_TUNNEL_USER:-${KNOT_TUNNEL_SSH%%@*}}"
 
 # 隧道私钥的绝对路径。
@@ -285,6 +250,43 @@ knot_enabled() {
   case "$(printf '%s' "${!1:-}" | tr '[:upper:]' '[:lower:]')" in
     1 | true | yes | on) return 0 ;;
     *) return 1 ;;
+  esac
+}
+
+# 隧道单元该装、该卸，还是这次发布压根没提这件事。
+#
+# install：KNOT_TUNNEL 开着且给了账号。账号与端口由中枢写进 tunnel.env，
+#          手工接入口时写在 site.env；这里按两份文件里声明的值判断，不依赖
+#          调用方先 source 过 tunnel.env。
+# remove ：两份文件里最后声明的那一个 KNOT_TUNNEL 是关的：有人在配置里说
+#          「不接入口了」。
+# keep   ：两份文件都没写 KNOT_TUNNEL。这时卸掉单元等于让已接入口的站点当场
+#          502，而这次发布并没有带来任何「隧道该撤掉」的依据。
+knot_tunnel_unit_action() {
+  if knot_enabled KNOT_TUNNEL && [[ -n "${KNOT_TUNNEL_SSH:-}" ]]; then
+    printf 'install'
+    return 0
+  fi
+  local file line declared=""
+  for file in "${KNOT_SITE_ENV:-}" "${KNOT_SITE_DIR:-}/tunnel.env"; do
+    [[ -n "$file" && -f "$file" ]] || continue
+    line="$(grep -E '^[[:space:]]*KNOT_TUNNEL=' "$file" 2>/dev/null | tail -1)" || true
+    [[ -n "$line" ]] || continue
+    declared="${line#*=}"
+    declared="${declared%\"}"
+    declared="${declared#\"}"
+  done
+  case "$(printf '%s' "$declared" | tr '[:upper:]' '[:lower:]')" in
+    "")
+      printf 'keep'
+      ;;
+    0 | false | no | off)
+      printf 'remove'
+      ;;
+    *)
+      # 声明开着，却没拿到账号：部署早在这之前就因为缺账号停下了。
+      printf 'keep'
+      ;;
   esac
 }
 
@@ -453,61 +455,6 @@ knot_prune_launchd() {
   done
 }
 
-# 读某个公网入口文件里的一个键。
-#
-# 入口文件是叠加层：同一个键在 site.env 里有、入口里也有时，入口的赢。
-knot_entry_value() {
-  local entry_file="$1" key="$2"
-  (
-    set -a
-    # shellcheck source=/dev/null
-    source "$KNOT_SITE_ENV"
-    # shellcheck source=/dev/null
-    source "$entry_file"
-    # 与渲染时一致：入口换了 KNOT_DOMAIN，证书等默认值按这个域名重新推导。
-    knot_entry_defaults
-    set +a
-    printf '%s' "${!key:-}"
-  )
-}
-
-# 入口的静态根与 nginx conf 必须一个子域一份。
-#
-# 缺省值 /var/www/knot 与 /etc/nginx/conf.d/knot.conf 不带域名，是同一台入口主机上
-# 所有子域共用的：第二个子域照模板留空推上去，rsync --delete 会把第一个子域的静态根
-# 清成自己的 dist，cp 再把它的 nginx conf 换掉——前一个站点直接换品牌或停站。
-# 所以这两项留空不是「用默认」，是配错：推到入口之前就拒绝，别让 rsync 动手。
-knot_require_entry_paths() {
-  local web_root="${1:-}" conf="${2:-}" domain="${3:-}"
-  local key value example
-  for key in KNOT_ENTRY_WEB_ROOT KNOT_ENTRY_CONF; do
-    case "$key" in
-      KNOT_ENTRY_WEB_ROOT)
-        value="$web_root"
-        example="/var/www/<标签>"
-        ;;
-      *)
-        value="$conf"
-        example="/etc/nginx/conf.d/<标签>.xknot.si.conf"
-        ;;
-    esac
-    case "$value" in
-      "")
-        knot_fail "入口 ${domain} 的 ${key} 是空的。在 sites/${KNOT_SITE}/entry.${domain}.env 里写成这个子域自己的路径，例如 ${example}。"
-        ;;
-      /var/www/knot | /etc/nginx/conf.d/knot.conf)
-        knot_fail "入口 ${domain} 的 ${key} 还是共用的缺省值 ${value}。
-同一台入口主机上的每个子域都要有自己的路径，否则后推的会覆盖前一个。写成 ${example}。"
-        ;;
-      /*) ;;
-      *)
-        knot_fail "入口 ${domain} 的 ${key} 必须是绝对路径：${value}"
-        ;;
-    esac
-  done
-}
-
-# 规范入口的域名来自 KNOT_DOMAIN（local 为空，xknot.si 为签发的二级子域）。
 # 在后台起一个进程，并让它脱离调用者的会话和进程组。
 #
 # 只 nohup 是不够的：nohup 只挡 SIGHUP。调用者（CI、后台 shell、终端复用器）

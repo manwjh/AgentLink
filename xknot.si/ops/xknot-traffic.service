@@ -9,7 +9,7 @@ User=ec2-user
 Group=ec2-user
 WorkingDirectory=/opt/xknot
 Environment=XKNOT_DATA_DIR=/opt/xknot/var
-# 入口 nginx 由 knot-platform/ops/entry/log.conf.template 写这一份。
+# 入口访问日志由中枢生成的每份 vhost 自己声明格式（server/provision.mjs）。
 Environment=XKNOT_ACCESS_LOG=/var/log/nginx/knot-access.log
 ExecStart=/usr/bin/node /opt/xknot/ops/traffic.mjs
 NoNewPrivileges=true

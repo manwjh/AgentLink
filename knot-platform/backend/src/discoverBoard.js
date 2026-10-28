@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -109,7 +108,7 @@ export async function listActivePeople(pool, limit = 20) {
 }
 
 export async function assembleDiscoverBoard(pool, meta = {}, { timeZone } = {}) {
-  // 公开快照关掉时写一份空板，入口主机下一次推送就会把旧内容清掉。
+  // 公开快照关掉时写一份空板，中枢下一次取回时就会把入口上的旧内容清掉。
   if (!publicBoardEnabled()) {
     return { ...meta, information: [], requests: [], people: [], facets: { categories: [], topics: [] }, counts: null };
   }
@@ -182,7 +181,7 @@ function jsonPath(boardDir) {
   return path.join(boardDir, "discover.json");
 }
 
-export async function writeDiscoverBoard(env, deps = {}) {
+export async function writeDiscoverBoard(env) {
   // 时区由绑定方给（它手上有站点档案）；单独调用的地方没有档案，就按实例所在时区算。
   const timeZone = env.timeZone ? env.timeZone() : undefined;
   const board = await assembleDiscoverBoard(env.pool, env.meta ? env.meta() : {}, { timeZone });
@@ -191,7 +190,6 @@ export async function writeDiscoverBoard(env, deps = {}) {
   await mkdir(env.boardDir, { recursive: true });
   await writeFile(tmp, JSON.stringify(board));
   await rename(tmp, dest);
-  if (deps.push) deps.push(env.boardDir);
   return board;
 }
 
@@ -199,7 +197,7 @@ let dirty = false;
 let wait = null;
 let chain = Promise.resolve();
 
-export function scheduleDiscoverWrite(env, push) {
+export function scheduleDiscoverWrite(env) {
   dirty = true;
   if (wait) return;
   wait = setTimeout(() => {
@@ -207,35 +205,12 @@ export function scheduleDiscoverWrite(env, push) {
     const run = async () => {
       while (dirty) {
         dirty = false;
-        await writeDiscoverBoard(env, { push });
+        await writeDiscoverBoard(env);
       }
     };
     chain = chain.then(run).catch((error) => console.error(error));
   }, 200);
   wait.unref?.();
-}
-
-export function pushDiscoverBoard(boardDir) {
-  const cmd = process.env.KNOT_DISCOVER_PUSH_CMD;
-  if (!cmd || !boardDir) return;
-  // 推送失败若彻底静默（stdio: ignore）：入口快照停在上一次成功的样子，
-  // 页面照常打开，只是没有新内容——最容易被忽略的一种故障。
-  // 这里只收 stderr 的前一小段，非 0 退出时打一行，别把 rsync 的进度刷进日志。
-  const child = spawn(cmd, [boardDir], { stdio: ["ignore", "ignore", "pipe"], detached: true });
-  let stderr = "";
-  child.stderr?.on("data", (chunk) => {
-    if (stderr.length < 2048) stderr += chunk.toString();
-  });
-  child.on("error", (error) => console.error("discover push failed to start:", error.message));
-  child.on("close", (code, signal) => {
-    if (code === 0) return;
-    const detail = stderr.trim().split("\n").slice(-3).join(" | ");
-    console.error(
-      `discover push failed (${code ?? signal}): the entry keeps serving the previous snapshot.` +
-        (detail ? ` ${detail}` : "")
-    );
-  });
-  child.unref();
 }
 
 export function bindDiscoverBoard({ pool, uploadDir, boardDir, profile }) {
@@ -246,8 +221,8 @@ export function bindDiscoverBoard({ pool, uploadDir, boardDir, profile }) {
     meta: () => discoverBoardMeta({ profile }),
     timeZone: () => siteTimeZone(profile?.view?.().site),
   };
-  setDiscoverPublisher(() => scheduleDiscoverWrite(env, pushDiscoverBoard));
-  scheduleDiscoverWrite(env, pushDiscoverBoard);
+  setDiscoverPublisher(() => scheduleDiscoverWrite(env));
+  scheduleDiscoverWrite(env);
   return {
     dir: env.boardDir,
     // 给 `/api/web/home` 用的只读副本：首屏画的那份快照和这里读到的必须是同一份。
@@ -257,7 +232,7 @@ export function bindDiscoverBoard({ pool, uploadDir, boardDir, profile }) {
       try {
         await access(file);
       } catch {
-        await writeDiscoverBoard(env, { push: pushDiscoverBoard });
+        await writeDiscoverBoard(env);
       }
       return file;
     },

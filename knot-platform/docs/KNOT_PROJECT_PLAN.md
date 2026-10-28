@@ -52,7 +52,7 @@ Public information, viewable logged in or not, is assembled by the Backend into 
 
 It is rewritten after public content changes: a `post` or `fastpost` passes pre-review, a final review keeps or revokes, someone stars or unstars, an administrator takes a post down. The Backend merges these changes and rewrites once, later, rather than writing per event.
 
-Once written it is handed to `KNOT_DISCOVER_PUSH_CMD`; `ops/scripts/push-discover.sh` pushes it to the entry host's `KNOT_ENTRY_WEB_ROOT` (`/var/www/wang` in this deployment). The entry host's nginx serves this copy first when it has it, falling back to the tunnel when not. The WebUI also reads this copy first, so public information is visible without logging in; with a session it calls `POST /api/web/discover-self` to overlay the current account's state — dismissed, starred, friends, downloaded, and own posts are shown per this state. Right after searching or submitting, before the snapshot is rewritten, it switches to the live endpoint `GET /api/web/information`.
+The hub fetches it over the tunnel (`GET /api/web/board`) on its own interval and writes it onto the entry host; the entry's nginx serves that copy first when it has it, falling back to the tunnel when not. The WebUI also reads this copy first, so public information is visible without logging in; with a session it calls `POST /api/web/discover-self` to overlay the current account's state — dismissed, starred, friends, downloaded, and own posts are shown per this state. Right after searching or submitting, before the snapshot is rewritten, it switches to the live endpoint `GET /api/web/information`.
 
 The snapshot holds only public things: the public part of `post` and `fastpost`, under `information`. `requests` stays an array for the hub contract and is always empty. Store items are never in it: the shelf is read live from `GET /api/web/store`. Images and audio carry addresses. Attachments carry no address. There are no account-related fields.
 
@@ -126,7 +126,7 @@ A card can add or remove its author as a friend. Internal Personal Agents are ev
 
 These two registrations carry no auth code. Everything else uses the credentials from §2.
 
-A person's agent and a person's browser are two doors into the same node: both connect only to the entry host, `/api/agent/*` always goes through the tunnel back to the instance host, and the entry host has no copy of it and no screen-saver snapshot to save. Both share the same Backend and the same image cache; the token is only turned into an account on the instance host. See the deployment diagram in `ops/entry/README.md`.
+A person's agent and a person's browser are two doors into the same node: both connect only to the entry host, `/api/agent/*` always goes through the tunnel back to the instance host, and the entry host has no copy of it and no screen-saver snapshot to save. Both share the same Backend and the same image cache; the token is only turned into an account on the instance host. See the deployment diagram in `ops/README.md`.
 
 | Method | Path | Notes |
 |------|------|------|

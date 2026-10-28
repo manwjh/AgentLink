@@ -4,7 +4,7 @@
 
 这是联盟门户自己的部署。用 `knot-platform` 部署的伙伴站点不在这里，也不由这套脚本管理；两台若是同一台机器，只说明共用主机，不构成依赖。
 
-这台机器同时是**中枢主机**和**入口主机**（`wang.xknot.si` 等实例入口）。角色与归属见 [`docs/concepts.md`](../../docs/concepts.md)：中枢的配置归本项目的 `ops/`，入口的配置归实例侧 `knot-platform/ops/entry/`，两边不互相引用。
+这台机器同时是**中枢主机**和**入口主机**（`wang.xknot.si` 等实例入口）。角色与归属见 [`docs/concepts.md`](../../docs/concepts.md)：中枢的配置归本项目的 `ops/`，每个已签发子域的入口 conf 由开通进程渲染并安装，两边不互相引用。
 
 ## 主机
 
@@ -196,7 +196,7 @@ curl -sI --resolve xknot.si:443:54.169.33.64 https://xknot.si/
 
 ## 实例侧
 
-实例怎么部署、入口与隧道怎么配，不在本文范围。当前实例实现是 `knot-platform`：入口与隧道见 `knot-platform/ops/entry/README.md`，主机与密钥由各自的 `sites/<站点>/site.env` 给出。换别的实现，本文不需要改——中枢只认 `/api/health` 与接入件。
+实例怎么部署、隧道怎么配，不在本文范围。当前实例实现是 `knot-platform`：隧道见 `knot-platform/ops/README.md` 第 4 节，主机与密钥由各自的 `sites/<站点>/site.env` 给出。换别的实现，本文不需要改——中枢只认 `/api/health` 与接入件。
 
 ## 禁止
 

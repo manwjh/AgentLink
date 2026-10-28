@@ -200,4 +200,4 @@ Agent 只凭 `Authorization: Bearer <token>` 调用 `/api/agent/*`，不需要�
 
 ## 10. 边界
 
-数据库与 knot-intel 的审查只在 Backend 内。上传目录由 `UPLOAD_DIR` 配置。公开快照和它的预览图写在 `DISCOVER_BOARD_DIR`，缺省是上传目录下的 `board`，写好后由 `KNOT_DISCOVER_PUSH_CMD` 推到入口主机。登录密钥的信写明是哪个站：主题为 `<站点名> 登录密钥`，正文带站点名、对外地址与联系方式（有就写），语种跟站点默认。配了 `XKNOT_HUB_RELAY_TOKEN` 时优先走中枢代发（只发主题与纯文本，发信人恒为中枢的 `MAIL_FROM`，`Reply-To` 落到站点档案的 `contact`，用凭据自己的额度）；中枢不可用而本机 SMTP 也配了时回退到本机。两种发法共用同一份主题与正文骨架，代发的那一份多一行代发声明，HTML 版面只在端侧发出。建议与投诉信只走本机 SMTP，不占委托额度。
+数据库与 knot-intel 的审查只在 Backend 内。上传目录由 `UPLOAD_DIR` 配置。公开快照和它的预览图写在 `DISCOVER_BOARD_DIR`，缺省是上传目录下的 `board`，中枢随后经隧道取回，落到入口主机上。登录密钥的信写明是哪个站：主题为 `<站点名> 登录密钥`，正文带站点名、对外地址与联系方式（有就写），语种跟站点默认。配了 `XKNOT_HUB_RELAY_TOKEN` 时优先走中枢代发（只发主题与纯文本，发信人恒为中枢的 `MAIL_FROM`，`Reply-To` 落到站点档案的 `contact`，用凭据自己的额度）；中枢不可用而本机 SMTP 也配了时回退到本机。两种发法共用同一份主题与正文骨架，代发的那一份多一行代发声明，HTML 版面只在端侧发出。建议与投诉信只走本机 SMTP，不占委托额度。

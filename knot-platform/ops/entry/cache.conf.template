@@ -1,8 +1,0 @@
-# Knot 入口的上传缓存区。由 ops/scripts/render-config.mjs 从 sites/<站点>/site.env 生成。
-#
-# 单独一份，是因为 nginx 不允许同名 zone 声明两次。
-# 这一份在同一台入口主机上只装一次，static 入口使用它。
-#
-# 由 push-entry.sh 装在规范入口的 conf 同目录下，文件名 knot-cache.conf。
-
-proxy_cache_path {{KNOT_ENTRY_CACHE_DIR}} levels=1:2 keys_zone={{KNOT_ENTRY_CACHE_ZONE}}:10m max_size={{KNOT_ENTRY_CACHE_SIZE}} inactive=7d use_temp_path=off;

@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 export const SNAPSHOT_FILE = "discover.json";
 export const SNAPSHOT_STORE = "snapshots.json";
 
-/** 入口静态根下的快照路径。与 provision.mjs 的 `root` 同一个约定。 */
+/** 入口磁盘根（nginx 的 `root`）下的快照路径。与 provision.mjs 的 `root` 同一个约定。 */
 export function snapshotPath(root, file = SNAPSHOT_FILE) {
   const dir = String(root || "").replace(/\/+$/, "");
   return dir ? `${dir}/${file}` : "";

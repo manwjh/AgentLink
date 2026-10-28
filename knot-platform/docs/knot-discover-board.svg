@@ -38,14 +38,14 @@
     <text x="788" y="86" font-size="12" fill="#333">discover.json</text>
     <text x="788" y="103" font-size="12" fill="#333">图片用原地址 · images use original URLs</text>
 
-    <text x="1088" y="64" font-size="15" font-weight="600" fill="#111">push-discover.sh</text>
-    <text x="1088" y="86" font-size="12" fill="#333">推到入口 · push to entry</text>
-    <text x="1088" y="103" font-size="12" fill="#333">/var/www/knot</text>
+    <text x="1088" y="64" font-size="15" font-weight="600" fill="#111">中枢取回 · Hub fetch</text>
+    <text x="1088" y="86" font-size="12" fill="#333">取回并落盘 · fetch then write</text>
+    <text x="1088" y="103" font-size="12" fill="#333">entry disk</text>
 
     <text x="300" y="64" font-size="12" fill="#333">变化 · Changes</text>
     <text x="616" y="64" font-size="12" fill="#333">写入 · Write</text>
-    <text x="960" y="64" font-size="12" fill="#333">推送 · Push</text>
-    <text x="726" y="146" font-size="12" fill="#333">推上去 · Push up</text>
+    <text x="960" y="64" font-size="12" fill="#333">取回 · Fetch</text>
+    <text x="726" y="146" font-size="12" fill="#333">取回 · Pull</text>
 
     <text x="318" y="223" font-size="12" fill="#333">读 · Read</text>
     <text x="642" y="214" font-size="12" fill="#333">没有快照时</text>
@@ -59,7 +59,7 @@
 
     <text x="484" y="218" font-size="15" font-weight="600" fill="#111">入口 nginx · Entry nginx</text>
     <text x="484" y="242" font-size="12" fill="#333">有快照就给这一份 · serves it when present</text>
-    <text x="484" y="262" font-size="12" fill="#333">/var/www/knot/discover.json</text>
+    <text x="484" y="262" font-size="12" fill="#333">/var/www/&lt;id&gt;/discover.json</text>
 
     <text x="860" y="218" font-size="15" font-weight="600" fill="#111">回落：经隧道到 Backend · fallback via tunnel</text>
     <text x="860" y="242" font-size="12" fill="#333">GET /api/web/information</text>

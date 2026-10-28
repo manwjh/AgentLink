@@ -35,7 +35,7 @@ export const CASES = [
       renderVhost({ domain: "cpswang.xknot.si", root: "/var/www/cpswang", port: 18090, entry: true }),
   },
   {
-    file: "entry-static.conf",
+    file: "entry-pending.conf",
     render: () =>
       renderVhost({ domain: "travel-sg.xknot.si", root: "/var/www/travel-sg", port: 18091 }),
   },

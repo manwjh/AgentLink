@@ -993,15 +993,15 @@ Monitoring has two layers: **collection is independent, display reads one docume
 
 ### 11.2 Entry traffic
 
-All subdomains' public traffic goes through one entry nginx — static served directly by it, API returning through the tunnel. There is one collection point, so this data needs no instance cooperation and no instrumentation.
+All subdomains' public traffic goes through one entry nginx: pages and `/api` both return through the tunnel, with a cache hit served from the entry's own disk. There is one collection point, so this data needs no instance cooperation and no instrumentation.
 
-The precondition is the entry having the log format installed: `knot-platform/ops/entry/log.conf.template` defines `log_format knot_json`, and `site.conf.template` writes one `access_log /var/log/nginx/knot-access.log knot_json;` per server block. It is installed once per entry host, by `push-entry.sh`.
+Every rendered entry conf **declares** its own format: `renderVhost` writes a per-subdomain name (`knot_json_<subdomain>`, dots written as underscores) and an `access_log /var/log/nginx/knot-access.log <that name>;` into the 443 server block. Declaring it locally means no file has to be installed first, and `conf.d/*.conf` including by filename in alphabetical order cannot leave a subdomain pointing at a format that does not exist yet — `nginx -t` would report `unknown log format`.
 
-The portal's own conf (`ops/xknot.si.conf`) carries that same line. Without it its server block inherits `nginx.conf`'s default `main` format, which records no `$host`: aggregation can then map nothing, `hub.json` is never written, and the hourly run still exits successfully — a silent hole rather than an error. Because it references a format declared by the entry, that conf depends on `knot-log.conf` being installed on the same host.
+The portal's own conf (`ops/xknot.si.conf`) declares `knot_json_hub` the same way, under a name unique to that vhost. Without a declaration its server block inherits `nginx.conf`'s default `main` format, which records no `$host`: aggregation can then map nothing, `hub.json` is never written, and the hourly run still exits successfully — a silent hole rather than an error.
 
-Subdomains issued by automatic provisioning do not go through `push-entry.sh`, so `server/provision.mjs` carries the set itself: `renderVhost` **declares** a per-subdomain unique format in each conf (`knot_json_<subdomain>`, dots written as underscores), then writes `access_log ... <that name>` in the 443 server. It does not share `knot-log.conf` because `conf.d/*.conf` includes by filename: the shared file sorts after `cpswang.xknot.si.conf`, where the `knot_json` it declares does not yet exist in that file, so `nginx -t` reports `unknown log format`. Missing this line leaves a new node's "entry traffic" as "never collected".
+Missing the line in a rendered conf leaves a new node's "entry traffic" as "never collected".
 
-These confs are generated on a remote host whose only check is a single `nginx -t`, so their exact text is pinned as fixtures: `server/fixtures/{http-stage,entry-static,entry-proxied}.conf`, plus the placeholder page and the sshd block. `server/provision.golden.test.mjs` compares the whole rendering byte for byte and prints a line diff when they differ, so a template change shows up in review instead of arriving unannounced on the entry host. Changing one on purpose means `node server/fixtures/render-golden.mjs --write`, with that diff committed alongside the code.
+These confs are generated on a remote host whose only check is a single `nginx -t`, so their exact text is pinned as fixtures: `server/fixtures/{http-stage,entry-pending,entry-proxied}.conf`, plus the placeholder page and the sshd block. `server/provision.golden.test.mjs` compares the whole rendering byte for byte and prints a line diff when they differ, so a template change shows up in review instead of arriving unannounced on the entry host. Changing one on purpose means `node server/fixtures/render-golden.mjs --write`, with that diff committed alongside the code.
 
 - The query string is never logged: share tokens and search terms must not enter the log.
 - `$host` is the only subdomain identifier, mapped to id by `instances.json` on the aggregation side; hosts outside the manifest are counted but not written.
@@ -1015,7 +1015,7 @@ These confs are generated on a remote host whose only check is a single `nginx -
 - The same zone also caches the page skeleton (`location /`, 10 seconds): `proxy_cache_background_update` serves the stale copy first after expiry and refetches in the background, while `use_stale` serves the previous shell when the tunnel drops. This is the static-serve tier's capability; without it, a tunnel hiccup blanks the whole page. The upstream sends `no-cache` for `index.html`, so here only `Cache-Control` and `Expires` are ignored, and responses carrying `Set-Cookie` still do not enter the cache.
 - Uploaded files (`/api/web/uploads/`) are cached at the entry too, keyed by `$uri` alone and kept for 1 day. Nothing is ignored here: whether a file may enter the shared cache is decided by the backend's `Cache-Control` (public content is `public`; content only its owner may read is `private` and stays out). Same semantics as the statically served entry.
 - Every upstream-bound location on the entry (`/api/`, `/api/web/uploads/`, `/assets/`, `/`) carries the same plumbing: `Connection ""` (without it the upstream keepalive is void and every request reopens a TCP through the tunnel), `proxy_send_timeout` (otherwise a large upload on a slow uplink is cut at the 60-second default), and both forwarding source headers. They come from one `proxyDirectives()` in `server/provision.mjs`, not four hand-copied blocks, and `provision.test.mjs` checks them per location — a new location must be added to that list.
-- Cache zones and log formats are named per subdomain rather than shared: nginx allows one declaration per zone name, and a shared zone lets two sites' identical `$uri` keys collide in each other's cache. The `push-entry.sh` set uses a shared `knot_uploads` zone with a `$uri` key, which is fine for a few sites but should gain `$host` before the count grows.
+- Cache zones and log formats are named per subdomain rather than shared: nginx allows one declaration per zone name, and a shared zone lets two sites' identical `$uri` keys collide in each other's cache.
 
 ### 11.3 Who owns an entry conf
 
@@ -1024,11 +1024,11 @@ A `<subdomain>.conf` on the entry has one of two authors, and the hub only rewri
 | Author | Tell | What the hub does |
 |---|---|---|
 | Hub auto-connect | first line contains `由 auto-connect 生成，请勿手改` | verifies, rewrites when needed, reloads |
-| Partner's own `push-entry.sh` | first line is `由 ops/scripts/render-config.mjs` | leaves it alone, keeps collecting health and tunnel, says so once in the log |
+| Ops, by hand | no managed mark | leaves it alone, keeps collecting health and tunnel, says so once in the log |
 
 `switchEntry()` and the `vhost` / `tls` steps all read the existing file first and decide by `MANAGED_MARK`. Without that check `xknot-provision` would rewrite a partner's freshly pushed static conf back to whole-site proxy, so the two sides would overwrite each other and nobody could tell which one is live. A missing file (first provisioning) counts as "may create". Accepted nodes are reconciled every 2 minutes: `deploy-api.sh` overwrites the manifest, not this conf, so a faster round would only spawn a string of pointless sudo subprocesses.
 
-To move from proxy to static serving, the partner runs `push-entry.sh` once and the hub steps aside; to move back, remove the conf and let the hub regenerate it.
+To hand a manual conf back to the worker, run `node server/admin-cli.mjs entry-adopt <id>`; to take one over by hand, write it without the managed mark.
 
 ```bash
 npm run traffic                 # read the default log, write var/traffic, then recompute status.json
@@ -1060,8 +1060,8 @@ At the moment of connect `ops/warm-entry.mjs` runs once: it fetches the home pag
 | Scenario | Action |
 |------|------|
 | console has no traffic | `systemctl status xknot-traffic.timer`; `journalctl -u xknot-traffic` to see if it is "no access log" |
-| traffic all 0 or no subdomains | whether the entry conf has `access_log ... knot_json_<subdomain>`, and the matching `log_format` in the same file; whether `nginx -t` passes. Automatic provisioning's conf carries both lines; manually written ones (like `wang`) use `knot_json` from `knot-log.conf`, which must sort before it by filename |
-| one subdomain's number clearly too small | it may have taken the `proxy` serve mode with a high cache-hit rate; check `cache` and `upstream.requests`, not bytes alone |
+| traffic all 0 or no subdomains | whether the entry conf has `access_log ... knot_json_<subdomain>`, and the matching `log_format` in the same file; whether `nginx -t` passes. Automatic provisioning's conf carries both lines; a conf written by hand earlier is taken over with `admin-cli entry-adopt <id>` and then carries them too |
+| one subdomain's number clearly too small | a high cache-hit rate means most reads never reach the instance; check `cache` and `upstream.requests`, not bytes alone |
 | hosts outside the manifest have requests | check the entry conf's `server_name` and DNS; the aggregation log lists ignored hosts |
 | tunnel always "disconnected" | whether `var/peers.json` has that id; if not, the tunnel is down, or the hub is not on the entry host |
 | status.json not updating | all three chains recompute it: health patrol, provision worker, traffic aggregation. All stopped leaves only the CLI |
