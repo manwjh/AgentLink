@@ -15,6 +15,9 @@ EnvironmentFile=-/opt/xknot/var/provision.env
 Environment=XKNOT_DATA_DIR=/opt/xknot/var
 Environment=XKNOT_INSTANCES_FILE=/opt/xknot/instances.json
 Environment=XKNOT_FEDERATION_FILE=/opt/xknot/federation.json
+# 与 xknot-republish.service 同一份取值：接通那一刻重算门户快照要写到这里，
+# 不写 /opt/xknot/web/dist（中枢主机上没有前端工具链，也没有 dist）。
+Environment=XKNOT_WEB_ROOT=/var/www/xknot
 ExecStart=/usr/bin/node /opt/xknot/ops/provision-worker.mjs
 Restart=always
 RestartSec=10

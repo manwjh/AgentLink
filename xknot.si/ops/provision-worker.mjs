@@ -26,13 +26,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promises as dns } from "node:dns";
 
-import { markActive, publishInstance } from "../server/publish.mjs";
+import { markActive, markRosterLive, publishInstance } from "../server/publish.mjs";
 import { openStore } from "../server/store.mjs";
 import { collectPeers } from "./peers.mjs";
 import { resolveLocations } from "./geoip.mjs";
 import { refreshStatus } from "./node-status.mjs";
 import { SNAPSHOT_STORE, collectSnapshots } from "./snapshots.mjs";
 import { warmEntry } from "./warm-entry.mjs";
+import { notifyLive } from "./notify-live.mjs";
 import {
   AWAITING_TIMEOUT_MS,
   ProvisionError,
@@ -87,6 +88,31 @@ const store = openStore(path.join(dataDir, "xknot.db"));
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
+}
+
+// 门户是静态快照：把 status 改成 active 只是改了清单，卡片要等 data/hub.json 重算。
+// 不在这里重算，节点就会一直「在线但首页没有它」，直到有人手工构建一次。
+// 用子进程跑，不阻塞轮询；失败只留一行日志，xknot-republish.timer 会补。
+let portalChild = null;
+export function refreshPortal({ execPath = process.execPath, script = path.join(here, "republish.mjs") } = {}) {
+  if (portalChild) return; // 同一轮里接通多个节点时，跑一次就够
+  // 没给门户根目录时，republish 会退回 <仓库>/web/dist/data/hub.json——那不是
+  // nginx 在发的文件，重算等于白做。worker 的 unit 里必须带 XKNOT_WEB_ROOT
+  // （与 xknot-republish.service 同一份取值），缺了就说清楚，别静默。
+  if (!process.env.XKNOT_WEB_ROOT) {
+    log("门户快照未重算：XKNOT_WEB_ROOT 未设置，等定时任务补");
+    return;
+  }
+  const child = spawn(execPath, [script, "--quiet"], { cwd: root, stdio: "inherit" });
+  portalChild = child;
+  child.on("close", (code) => {
+    portalChild = null;
+    log(code === 0 ? "门户快照已重算" : `门户快照重算失败（退出码 ${code}），等定时任务补`);
+  });
+  child.on("error", (error) => {
+    portalChild = null;
+    log(`门户快照重算无法启动：${error.message}`);
+  });
 }
 
 // ---- 入口主机：只走参数数组，不经 shell ----
@@ -268,24 +294,186 @@ function warmEntryCache(run) {
     .finally(() => warming.delete(origin));
 }
 
-export async function advance(run) {
-  // 已经验收的：确认清单仍是 active，并核对入口 conf 还在「整站反代」状态。
-  // deploy-api.sh 会把仓库里的 instances.json 同步上来，那里可能还是 pending；
-  // 接通是既成事实，以 provision_runs 为准，顺手改回来即可。
-  if (run.state === "active") {
-    const again = await markActive({ manifestFile, id: run.instanceId });
-    if (again.changed) log(`${run.instanceId}: 清单被覆盖回 pending，已改回 active`);
+// 已验收节点每两分钟核对一次入口 conf 就够：部署覆盖的是清单文件，不是这份
+// conf；20 秒一次对几十个节点就是一串白起的 sudo 子进程。
+const ENTRY_CHECK_MS = 120_000;
+const entryCheckedAt = new Map();
+// 清单被运营改成 suspended / retired 时，worker 每轮都会撞上同一件事：
+// 只在取值变化时记一行，不刷日志。
+const refusedState = new Map();
+const restoreErrorAt = new Map();
+
+// 同一件事每 2 分钟才说一次：这些分支都是「等人处理」，每 20 秒喊一遍只会在
+// journald 里刷屏，真正的新信息被埋掉。
+function logThrottled(map, key, message, log) {
+  if (Date.now() - (map.get(key) || 0) >= ENTRY_CHECK_MS) log(message);
+  map.set(key, Date.now());
+}
+
+// 已验收节点的核对只依赖这一组东西，全部可替换：这段逻辑被两次「清理死代码」
+// 误删过，没有测试盯着它，所以它得能脱离 sudo 与真实清单单独跑。
+const activeDeps = {
+  store,
+  host,
+  log,
+  manifestFile,
+  rosterFile,
+  markActive,
+  markRosterLive,
+  publishInstance,
+  switchEntry,
+  refreshPortal,
+  warmEntryCache,
+  notifyLive,
+};
+
+/**
+ * 已验收：清单仍是 active、名册备注已换、入口 conf 还是整站反代。
+ * deploy-api.sh 会把仓库里的 instances.json 同步上来，那里可能还是 pending
+ * 甚至没有这一条；接通是既成事实，以 provision_runs 为准，顺手改回来即可。
+ */
+export async function reconcileActive(run, deps = activeDeps) {
+  let again = await deps.markActive({ manifestFile: deps.manifestFile, id: run.instanceId });
+  if (again.changed) {
+    deps.log(`${run.instanceId}: 清单被覆盖回 pending，已改回 active`);
+    // 快照可能已经按 pending 重算过一遍（门户上少了一条），同样要补回来。
+    deps.refreshPortal();
+  }
+  // 覆盖有时是整条消失（仓库那份清单里还没有这个节点）。接通记录还在，
+  // 就按它把清单与名册补回去；否则下一次改清单的动作会把这个节点彻底弄丢。
+  if (again.error === "not_listed") {
+    const application = deps.store.getApplication(run.applicationId);
+    if (!application) {
+      logThrottled(restoreErrorAt, run.instanceId, `${run.instanceId}: 清单里没有这一条，接通记录也对不上申请，无法补回`, deps.log);
+    } else if (application.status !== "approved") {
+      // 撤回过的单不再补回：它从清单里消失是运营按撤回收尾的结果，
+      // 自动补回去等于把一个已经离开的成员又挂上门户。
+      logThrottled(
+        restoreErrorAt,
+        run.instanceId,
+        `${run.instanceId}: 申请状态是 ${application.status}，不补回清单；需要下线请改 provision_runs`,
+        deps.log
+      );
+    } else {
+      const restored = await deps.publishInstance({
+        application,
+        tunnelAccount: run.account,
+        tunnelPort: run.port,
+        manifestFile: deps.manifestFile,
+        rosterFile: deps.rosterFile,
+      });
+      if (restored.error || restored.entry == null) {
+        // url_taken / id_taken 这类要靠人判断，重试也不会自己好：同一句话只喊一次。
+        logThrottled(
+          restoreErrorAt,
+          run.instanceId,
+          `${run.instanceId}: 清单条目已丢失，补回失败 ${restored.error || "unknown"}`,
+          deps.log
+        );
+      } else {
+        restoreErrorAt.delete(run.instanceId);
+        again = await deps.markActive({ manifestFile: deps.manifestFile, id: run.instanceId });
+        deps.log(
+          `${run.instanceId}: 清单条目已丢失，按接通记录补回（${again.changed ? "active" : again.error || "未变更"}）`
+        );
+        // 补回来的条目只有申请里的字段：档位回落成默认、收录日期是今天。
+        // 原来若不是免费收录，需要在清单里改回去——这句话就是要让人看见。
+        deps.log(`${run.instanceId}: 补回的条目档位与收录日期按申请重建，如果原来是付费收录请手工改回`);
+        deps.store.recordEvent("instance.manifest_restored", run.instanceId, null);
+        await deps.markRosterLive({ manifestFile: deps.manifestFile, rosterFile: deps.rosterFile, id: run.instanceId });
+        deps.refreshPortal();
+      }
+    }
+  } else if (again.error === "not_pending") {
+    // 运营在清单上做的暂停 / 下架不覆盖，但也不能静默：只在取值变化时记一次。
+    if (refusedState.get(run.instanceId) !== again.status) {
+      refusedState.set(run.instanceId, again.status);
+      deps.log(`${run.instanceId}: 清单状态是 ${again.status || "unknown"}，不是 pending，不覆盖；等人处理`);
+    }
+  }
+
+  const now = Date.now();
+  if (now - (entryCheckedAt.get(run.instanceId) || 0) >= ENTRY_CHECK_MS) {
+    entryCheckedAt.set(run.instanceId, now);
     try {
-      const conf = await switchEntry({ host, run, entry: true });
-      if (conf.changed) {
-        log(`${run.instanceId}: 入口已切回整站反代`);
-        void warmEntryCache(run);
+      // 名册里那句「等待接通验收」在节点通了之后就成假话。只换那句话，
+      // 运营手写过的备注不动；顺手核对，靠这一轮把历史遗留的那几条也修掉。
+      const note = await deps.markRosterLive({
+        manifestFile: deps.manifestFile,
+        rosterFile: deps.rosterFile,
+        id: run.instanceId,
+      });
+      if (note.changed) deps.log(`${run.instanceId}: 名册备注已改为已接通`);
+      else if (note.error && note.error !== "not_listed") {
+        deps.log(`${run.instanceId}: 名册备注未更新 ${note.error}`);
       }
     } catch (error) {
-      log(`${run.instanceId}: 入口 conf 核对失败 ${error.code || error.message}`);
+      deps.log(`${run.instanceId}: 名册备注未更新 ${error.message}`);
     }
-    return run;
+    try {
+      const conf = await deps.switchEntry({ host: deps.host, run, entry: true });
+      if (conf.changed) {
+        deps.log(`${run.instanceId}: 入口已切回整站反代`);
+        void deps.warmEntryCache(run);
+      } else if (conf.external) {
+        deps.log(`${run.instanceId}: 入口 conf 不是中枢生成的，保持现状不改写`);
+      }
+    } catch (error) {
+      deps.log(`${run.instanceId}: 入口 conf 核对失败 ${error.code || error.message}`);
+    }
   }
+  return run;
+}
+
+/**
+ * 验收通过的收尾：名册里那句话改成实情、门户快照重算、给伙伴寄上线信。
+ * 三件事都不许把验收本身弄失败——各自吞掉错误，只留一行日志。
+ */
+export async function announceLive(run, deps = activeDeps) {
+  // 名册里那句「等待接通验收」现在成了假话，顺手换掉；运营手写过的备注不动。
+  try {
+    const roster = await deps.markRosterLive({
+      manifestFile: deps.manifestFile,
+      rosterFile: deps.rosterFile,
+      id: run.instanceId,
+    });
+    if (roster.changed) deps.log(`${run.instanceId}: 名册备注已改为已接通`);
+    else if (roster.error) deps.log(`${run.instanceId}: 名册备注未更新 ${roster.error}`);
+  } catch (error) {
+    deps.log(`${run.instanceId}: 名册备注未更新 ${error.message}`);
+  }
+  // 清单变了，门户快照也得跟着变，否则节点「在线但首页没有卡片」。
+  deps.refreshPortal();
+  // 伙伴等的是「你的站已经通了」。只对新接通的节点发：notify_log 里已有
+  // sent / pending 的同一个申请不会再发，运营手工补发过的也算。
+  try {
+    const sent = await deps.notifyLive({
+      store: deps.store,
+      application: deps.store.getApplication(run.applicationId),
+    });
+    if (sent.sent) deps.log(`${run.instanceId}: 已上线通知已发给伙伴`);
+    else if (sent.skipped === "already_sent") deps.log(`${run.instanceId}: 已上线通知此前发过，不重发`);
+    else if (sent.skipped === "no_smtp") deps.log(`${run.instanceId}: 没有 SMTP 配置，已上线通知未发（配置后手工补发）`);
+    else deps.log(`${run.instanceId}: 已上线通知未发 ${sent.skipped || sent.failed}`);
+  } catch (error) {
+    deps.log(`${run.instanceId}: 已上线通知发送异常 ${error.message}`);
+  }
+}
+
+/**
+ * 这一轮要推的 run：最近 N 条 + 全部已验收的。
+ * active 的 updated_at 停在激活那一刻，只按时间取会随节点增多沉出窗口，
+ * 自愈就静默失效了；两条来源按申请号合并，同一份 run 只推一次。
+ */
+export function dueRuns(store, limit = 20) {
+  const runs = new Map();
+  for (const run of store.listProvisionRuns(limit)) runs.set(run.applicationId, run);
+  for (const run of store.activeProvisionRuns()) runs.set(run.applicationId, run);
+  return [...runs.values()];
+}
+
+export async function advance(run) {
+  if (run.state === "active") return reconcileActive(run);
   if (run.state === "failed") return run;
 
   if (run.state === "provisioning") {
@@ -410,6 +598,7 @@ export async function advance(run) {
       store.saveProvisionRun(next);
       store.recordEvent("instance.active", run.instanceId, null);
       log(`${run.instanceId}: /api/health 通过，清单已改为 active`);
+      await announceLive(run, { store, log, manifestFile, rosterFile, markRosterLive, refreshPortal, notifyLive });
       if (afterActivate) {
         // 值来自 root 的 provision.env；交给 /bin/sh -c 就等于把那个文件的写权限
         // 变成 root 命令执行。只接受一个绝对路径，按参数数组执行，不经 shell 解析。
@@ -454,7 +643,8 @@ async function tick() {
     if (run) await advance(run);
   }
 
-  for (const run of store.listProvisionRuns(20)) {
+  // active 的 run 单独按状态取，见 dueRuns。
+  for (const run of dueRuns(store)) {
     await advance(run);
   }
 }

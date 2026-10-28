@@ -254,7 +254,7 @@ test("roster: acceptance replaces the placeholder note, not a written one", asyn
   });
   await markActive({ manifestFile, id: "cpswang" });
 
-  const first = await markRosterLive({ rosterFile, id: "cpswang", now: new Date("2026-10-23T10:00:00Z") });
+  const first = await markRosterLive({ manifestFile, rosterFile, id: "cpswang", now: new Date("2026-10-23T10:00:00Z") });
   assert.deepEqual(first, { ok: true, changed: true });
   let roster = JSON.parse(await readFile(rosterFile, "utf8"));
   const member = roster.members.find((item) => item.id === "cpswang");
@@ -262,17 +262,57 @@ test("roster: acceptance replaces the placeholder note, not a written one", asyn
   assert.equal(roster.updatedAt, "2026-10-23");
 
   // 再跑一次：已经不是那句占位话，什么都不做。
-  assert.deepEqual(await markRosterLive({ rosterFile, id: "cpswang" }), { ok: true, changed: false });
+  assert.deepEqual(await markRosterLive({ manifestFile, rosterFile, id: "cpswang" }), { ok: true, changed: false });
 
   // 运营手写的备注不被覆盖。
   member.note = "自营机房，夜间维护";
   await writeFile(rosterFile, `${JSON.stringify(roster, null, 2)}\n`);
-  assert.deepEqual(await markRosterLive({ rosterFile, id: "cpswang" }), { ok: true, changed: false });
+  assert.deepEqual(await markRosterLive({ manifestFile, rosterFile, id: "cpswang" }), { ok: true, changed: false });
   roster = JSON.parse(await readFile(rosterFile, "utf8"));
   assert.equal(roster.members.find((item) => item.id === "cpswang").note, "自营机房，夜间维护");
 });
 
 test("roster: an id that is not in the roster reports it instead of writing", async () => {
-  const { rosterFile } = await fixture();
-  assert.deepEqual(await markRosterLive({ rosterFile, id: "ghost" }), { error: "not_listed" });
+  const { manifestFile, rosterFile } = await fixture();
+  assert.deepEqual(await markRosterLive({ manifestFile, rosterFile, id: "ghost" }), { error: "not_listed" });
+});
+
+test("roster: the note update shares the manifest lock with publish", async () => {
+  // 发布与改备注都是「读名册 - 改名册」。若各拿一把锁，两者就会交错：
+  // 先读后写的那个把另一个刚写进去的内容整份盖回去。
+  const { manifestFile, rosterFile } = await fixture();
+  await publishInstance({
+    application: APP,
+    tunnelAccount: "knot-tunnel-cpswang",
+    tunnelPort: 18090,
+    manifestFile,
+    rosterFile,
+  });
+
+  // 让发布的落盘慢一拍：锁没共享时，备注那一路会拿着旧副本在它之后写回。
+  const slowWrite = async (file, value) => {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+  };
+  const [, note] = await Promise.all([
+    publishInstance({
+      application: { ...APP, id: "XK-2026-NEWONE", subdomain: "newone", url: "https://newone.xknot.si" },
+      tunnelAccount: "knot-tunnel-newone",
+      tunnelPort: 18099,
+      manifestFile,
+      rosterFile,
+      write: slowWrite,
+    }),
+    markRosterLive({ manifestFile, rosterFile, id: "cpswang", now: new Date("2026-10-23T10:00:00Z") }),
+  ]);
+
+  assert.deepEqual(note, { ok: true, changed: true });
+  const roster = JSON.parse(await readFile(rosterFile, "utf8"));
+  assert.ok(roster.members.some((member) => member.id === "newone"), "the concurrently published member must survive");
+  assert.equal(
+    roster.members.find((member) => member.id === "cpswang").note,
+    "已接通，门户已收录（2026-10-23）。"
+  );
+  const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
+  assert.ok(manifest.instances.some((instance) => instance.id === "newone"));
 });

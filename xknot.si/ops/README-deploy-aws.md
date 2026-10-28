@@ -73,6 +73,7 @@ KEY=~/.ssh/suanli-sg-probe.pem
 | `XKNOT_AWAITING_TIMEOUT_MS` | 可选，默认 `1800000`（30 分钟）：入口侧做完后等隧道多久算停滞，超过只记一条事件，不重试前置 |
 | `XKNOT_SNAPSHOT_INTERVAL_MS` | 可选，默认 `20000`（最短 `5000`）：多久经隧道取一次各实例的公开快照，内容没变不写盘 |
 | `XKNOT_AFTER_ACTIVATE` | 可选；改成 `active` 后执行的命令，例如重建门户 |
+| `XKNOT_WEB_ROOT` | 门户静态根，当前 unit 已置 `/var/www/xknot`：接通后重算的 `data/hub.json` 写这里，与 `xknot-republish.service` 同一份取值 |
 
 worker 每轮只推进一步，失败只记错误码（`dns_missing`、`tls_failed`…）并按退避重试（30 秒 / 2 分 / 10 分 / 30 分 / 2 小时，按步独立计数），这些码会原样出现在实例管理界面的 XKnot 栏。`tls` 连续失败 5 次就停下转 `failed`，不再自动重试：继续试只会把 Let's Encrypt 的失败授权限制（每主机名每小时 5 次）越拉越长。前置做完后停在 `awaiting_tunnel` 等对端来拉参数，超过 30 分钟记一条 `instance.awaiting_stalled`。它需要 `sudo`：建账号、写 sshd 与 nginx 配置、跑 certbot。**DNS 不在它手里**——入口域名需要一条泛解析 `*.xknot.si → XKNOT_ENTRY_HOST`；没有它，`dns` 这一步永远过不去。
 

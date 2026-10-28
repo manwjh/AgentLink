@@ -92,6 +92,21 @@ test("provision: a corrupt run row is visible, selected again, and overwritten",
   assert.equal(blocked.state, "pending", "已有可用 run 时重跑不该覆盖");
 });
 
+test("provision: accepted runs are listed by state, not only by recency", (t) => {
+  const { store } = withStore(t);
+  const accepted = store.createProvisionRun({ applicationId: "app-old", instanceId: "old", state: "active", steps: [] });
+
+  // 一批更新的 run 把它挤出最近 N 条：接入完成的记录不能因此不再被核对。
+  for (let i = 0; i < 25; i += 1) {
+    store.createProvisionRun({ applicationId: `app-${i}`, instanceId: `n${i}`, state: "provisioning", steps: [] });
+  }
+  assert.equal(store.listProvisionRuns(20).some((run) => run.instanceId === "old"), false);
+  assert.deepEqual(
+    store.activeProvisionRuns().map((run) => run.applicationId),
+    [accepted.applicationId]
+  );
+});
+
 test("public key: a withdrawn application refuses the key instead of bumping its version", (t) => {
   const { store } = withStore(t);
   const application = store.createApplication(applicationInput());

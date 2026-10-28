@@ -123,9 +123,14 @@ export const ROSTER_PENDING_NOTE = "子域与隧道已登记，等待接通验�
  *
  * 只改这一句默认话。运营手写过的备注一律不动——那是有判断的内容，
  * 不该被一次状态迁移盖掉。
+ *
+ * 锁按**清单**文件取，不用名册自己的锁：publishInstance、admin-cli publish、
+ * 配置保存都是「先拿清单的锁，再写名册」。这里若另开一把名册锁，两把锁互不
+ * 排斥，读 - 改 - 写就会交错，把刚发布的成员或刚换的备注盖掉。
  */
-export async function markRosterLive({ rosterFile, id, now = new Date() }) {
-  return withFileLock(rosterFile, async () => {
+export async function markRosterLive({ manifestFile, rosterFile, id, now = new Date() }) {
+  if (!manifestFile) return { error: "lock_file_required" };
+  return withFileLock(manifestFile, async () => {
     const roster = await readJson(rosterFile, "federation.json");
     if (!roster || !Array.isArray(roster.members)) return { error: "roster_unreadable" };
     const member = roster.members.find((item) => item.id === id);

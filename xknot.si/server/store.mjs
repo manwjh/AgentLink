@@ -797,6 +797,26 @@ export function openStore(file) {
       });
     },
 
+    // 已验收的 run：worker 每轮核对它们还在清单里、入口 conf 还是整站反代。
+    // 不能靠 listProvisionRuns 的前 N 条：active 的 updated_at 停在激活那一刻，
+    // 节点一多就沉出窗口，自愈会静默失效。按 state 取，条数按节点量给足。
+    activeProvisionRuns(limit = 200) {
+      return all(
+        `select application_id, run from provision_runs
+          where json_valid(run) and json_extract(run, '$.state') = 'active'
+          order by updated_at desc limit ?`,
+        Math.min(Number(limit) || 200, 500)
+      ).flatMap((row) => {
+        try {
+          const parsed = JSON.parse(row.run);
+          return parsed && typeof parsed === "object" ? [parsed] : [];
+        } catch {
+          // 坏行已经在 listProvisionRuns 里当占位出现，这里跳过就好。
+          return [];
+        }
+      });
+    },
+
     // 已通过、已交公钥、还没有 run 的单：worker 每一轮都用它来发现新活。
     // run 那一列的 JSON 坏掉时也重新选中：那一行不推进也不重来，等于永久停住。
     applicationsAwaitingProvision() {
