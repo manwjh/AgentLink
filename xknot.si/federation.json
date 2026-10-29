@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-10-27",
+  "updatedAt": "2026-10-28",
   "hub": "xknot.si",
   "members": [
     {
@@ -56,7 +56,7 @@
       },
       "listed": true,
       "since": "2026-10-27",
-      "note": "子域与隧道已登记，等待接通验收。",
+      "note": "已接通，门户已收录（2026-10-28）。",
       "mode": "subdomain"
     }
   ]

@@ -6,6 +6,13 @@
 # 用法：
 #   XKNOT_HUB_SSH=user@host ./ops/deploy-api.sh
 #   XKNOT_HUB_SSH=user@host ./ops/deploy-api.sh --dry-run
+#   XKNOT_HUB_SSH=user@host ./ops/deploy-api.sh --pull-manifest
+#
+# --pull-manifest 是反方向：开通进程会在中枢主机上改清单与名册（登记新实例、
+# 把名册那句「等待接通验收」换成实情），而这个脚本部署时用仓库内容覆盖远端。
+# 不先把远端那两份拉回仓库，下一次部署就会把它们悄悄盖回旧值。它只拉这两份
+# 文件，不碰静态站、不重启任何服务；拉完在 xknot.si/ 跑 npm run validate，
+# 确认后提交。仓库里这两份文件有未提交的改动时它拒绝执行，免得覆盖手改。
 #
 # 可覆盖的变量：
 #   XKNOT_HUB_SSH       必填，如 user@192.0.2.10
@@ -22,9 +29,11 @@ set -euo pipefail
 
 HUB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRY_RUN=0
+PULL_MANIFEST=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
+    --pull-manifest) PULL_MANIFEST=1 ;;
     *) echo "未知参数：$arg" >&2; exit 2 ;;
   esac
 done
@@ -94,6 +103,48 @@ if [[ "$DRY_RUN" != 1 && -n "$SSH_KEY" && ! -f "$SSH_KEY" ]]; then
   # 只报变量名，不回显路径：脚本输出会进部署日志。
   echo "XKNOT_SSH_KEY 指向的私钥不存在。要改用 ssh 默认身份，就别设这个变量。" >&2
   exit 1
+fi
+
+# 反方向：把中枢主机上的清单与名册拉回仓库。开通进程在中枢主机上写这两份
+# （登记新实例、把名册那句「等待接通验收」换成实情），部署则用仓库内容覆盖
+# 远端，所以不先拉回来，下一次部署会把这些改动悄悄盖回旧值。
+if [[ "$PULL_MANIFEST" == 1 ]]; then
+  echo "==> pull manifest from $XKNOT_HUB_SSH:$API_ROOT"
+  # 仓库里这两份有未提交改动时停在这里：拉取会直接覆盖它们。
+  # 不是 git 仓库就跳过这项检查，只做拉取。
+  if git -C "$HUB" rev-parse --git-dir >/dev/null 2>&1; then
+    if ! git -C "$HUB" diff --quiet -- instances.json federation.json ||
+      ! git -C "$HUB" diff --cached --quiet -- instances.json federation.json; then
+      echo "仓库里的 instances.json / federation.json 有未提交的改动：先提交或还原再拉取。" >&2
+      exit 1
+    fi
+  fi
+  if [[ "$DRY_RUN" == 1 ]]; then
+    echo "(dry-run) $XKNOT_HUB_SSH:$API_ROOT/{instances,federation}.json → $HUB/"
+    exit 0
+  fi
+  for name in instances.json federation.json; do
+    tmp="$(mktemp "$HUB/.$name.XXXXXX")"
+    # 拉取走 cat 而不是 scp：这里的路径是两个固定字面量，不会被拼进命令串。
+    if ! ssh "${SSH_OPTS[@]}" "$XKNOT_HUB_SSH" "cat $(shq "$API_ROOT/$name")" >"$tmp"; then
+      rm -f "$tmp"
+      echo "拉取失败：$API_ROOT/$name" >&2
+      exit 1
+    fi
+    # 半截传输与空文件都会让清单变成加载不出来的版本，落盘前先解析一遍。
+    if ! node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      echo "拉回来的 $name 不是合法 JSON：没有覆盖仓库里那一份。" >&2
+      exit 1
+    fi
+    mv -f "$tmp" "$HUB/$name"
+    echo "ok: $name"
+  done
+  if git -C "$HUB" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$HUB" --no-pager diff --stat -- instances.json federation.json
+  fi
+  echo "下一步在 xknot.si/ 跑 npm run validate，确认后提交。"
+  exit 0
 fi
 
 echo "==> prepare $XKNOT_HUB_SSH:$API_ROOT"
